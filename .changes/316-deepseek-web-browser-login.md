@@ -436,3 +436,33 @@ and `[DONE]` terminator.
 
 `deepseek_web_stream_test.go` parses the emitted frames the way a streaming client
 does and fails against the previous single-frame writer.
+
+### fix(deepseek-web): mint unique tool-call ids
+
+The call ids came from `time.Now().UnixNano() % 1_000_000`. Two calls minted in
+the same turn received the same id **every time**, because the clock does not
+advance between them — on Windows it moves in steps of hundreds of microseconds:
+
+```
+first  = "call_shell_969000"
+second = "call_shell_969000"
+```
+
+A client that groups parallel calls by `id` — the natural reading of a field called
+`id` — merged the two into one, and the concatenated argument objects were rejected
+before either command ran:
+
+```
+Validation failed for tool "bash": Tool call arguments are not valid JSON.
+Parse Error: Unexpected trailing characters at position 2
+Raw JSON: {}{}
+```
+
+The id is now minted from a process-wide counter, which cannot repeat. The tool name
+is still part of the id so a log line names what was called.
+
+Live, eight turns that each produced two parallel `shell` calls: distinct ids
+(`call_shell_15`, `call_shell_16`), distinct `index`, both argument objects valid.
+The previous code produced one id twice and the client merged them.
+
+`deepseek_web_callid_test.go` fails against the clock-derived id.

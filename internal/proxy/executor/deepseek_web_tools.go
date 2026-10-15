@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
+	"sync/atomic"
 )
 
 // Tool calling on this upstream is not a protocol feature, it is a convention
@@ -284,10 +284,26 @@ func deepSeekValidJSON(s string) bool {
 	return json.Unmarshal([]byte(s), &scratch) == nil
 }
 
-// deepSeekToolCallID mints a call id in the shape clients expect.
+// deepSeekToolCallID mints a call id that is unique within the process.
+//
+// The clock is not a source of uniqueness here. The previous version derived the
+// id from time.Now().UnixNano() % 1_000_000, and two calls minted in the same
+// turn landed on the same value every time: a Windows clock advances in coarse
+// steps of hundreds of microseconds, so both calls were stamped identically. A
+// client that groups parallel calls by id — which is the natural reading of a
+// field called `id` — then merged two tool calls into one, and the concatenated
+// argument objects were rejected before any of them ran ("Unexpected trailing
+// characters at position 2, Raw JSON: {}{}").
+//
+// A counter is the right tool: it cannot repeat, and the name is kept in the id
+// so a log line names the tool that was called.
 func deepSeekToolCallID(name string) string {
-	return "call_" + name + "_" + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 10)
+	return "call_" + name + "_" + strconv.FormatUint(deepSeekToolCallSeq.Add(1), 10)
 }
+
+// deepSeekToolCallSeq numbers every call the process mints. Monotonic, so an id
+// is never reused even across requests.
+var deepSeekToolCallSeq atomic.Uint64
 
 // deepSeekSurroundingText returns what the model wrote before and after the tool
 // calls, with the calls themselves removed.
