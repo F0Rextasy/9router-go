@@ -75,8 +75,8 @@
   )
   let credentialPlaceholder = $derived(
     isCookie
-      ? providerId === 'deepseek-web'
-        ? '{"value":"t.eyJ…"} from DevTools → Application → Local Storage'
+      ? providerId === 'grok-web'
+        ? 'sso=xxxxx... or just the raw value'
         : 'eyJhbGciOi...'
       : isXaiApiKey
         ? 'xai-...'
