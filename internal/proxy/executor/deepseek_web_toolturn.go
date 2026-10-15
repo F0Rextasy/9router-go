@@ -169,21 +169,95 @@ func deepSeekWriteStreamedAnswer(w http.ResponseWriter, req *Request, model stri
 	}, deepSeekReasoningDelta(accumulator))
 }
 
-// deepSeekWriteStreamedToolCall emits one tool call as SSE.
-func deepSeekWriteStreamedToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
-	return deepSeekWriteStreamedToolCalls(w, req, model, []deepSeekToolRequest{call}, preamble)
-}
-
 // deepSeekWriteStreamedToolCalls emits every recovered call as SSE. The arguments
-// go out as one delta rather than per-character ones: the whole point of buffering
-// was to get them whole, and a client reassembles them from a single frame
-// correctly.
+// go out whole rather than per-character: the point of buffering was to get them
+// whole, and a client reassembles them from the final frame correctly.
 //
-// All the calls travel in one frame. Splitting them across frames would make the
-// client start executing the first while the rest are still in flight — and a
-// model that answered about two cities meant its two calls to run together.
+// Each call travels in its own frame, with its `index`. That field is what tells a
+// client that two calls are two calls: the OpenAI stream protocol numbers every
+// parallel call, and a client keys its accumulator by that number. Sending both in
+// one frame left them with no index to separate them, so the client concatenated
+// the two argument objects into `{}{}` — a tool call whose arguments are not
+// JSON, rejected before the first command ran. The bug looked like a client fault
+// and was ours.
 func deepSeekWriteStreamedToolCalls(w http.ResponseWriter, req *Request, model string, calls []deepSeekToolRequest, preamble string) error {
-	return deepSeekWriteStreamedMessage(w, req, model, deepSeekToolCallMessage(calls, preamble), nil)
+	hw := proxy.NewHeartbeatWriter(req.Ctx, w, 0)
+	defer hw.Close()
+	flusher := proxy.WriteSSEHeaders(hw)
+
+	responseID := deepSeekResponseID()
+	created := time.Now().Unix()
+
+	if start := req.StartTime; !start.IsZero() && req.TTFT != nil && *req.TTFT == 0 {
+		*req.TTFT = time.Since(start).Milliseconds()
+	}
+
+	for i, call := range calls {
+		delta := map[string]any{
+			"role": "assistant",
+			"tool_calls": []any{map[string]any{
+				"index": i,
+				"id":    deepSeekToolCallID(call.Name),
+				"type":  "function",
+				"function": map[string]any{
+					"name":      call.Name,
+					"arguments": call.Arguments,
+				},
+			}},
+		}
+		// The model's prose belongs to the first frame: a client records content
+		// as it arrives, and only the assistant turn starts with it.
+		if i == 0 && preamble != "" {
+			delta["content"] = preamble
+			if req.ResponseBuf != nil {
+				req.ResponseBuf.Write([]byte(preamble))
+			}
+		}
+		chunk := map[string]any{
+			"id":      responseID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": nil}},
+		}
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			return fmt.Errorf("deepseek-web: marshal chunk: %w", err)
+		}
+		if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", encoded)); err != nil {
+			return fmt.Errorf("deepseek-web: write chunk: %w", err)
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	message := deepSeekToolCallMessage(calls, preamble)
+	chunk := map[string]any{
+		"id":      responseID,
+		"object":  "chat.completion.chunk",
+		"created": created,
+		"model":   model,
+		"choices": []map[string]any{{
+			"index":         0,
+			"delta":         map[string]any{},
+			"finish_reason": deepSeekFinishReason(message),
+		}},
+	}
+	encoded, err := json.Marshal(chunk)
+	if err != nil {
+		return fmt.Errorf("deepseek-web: marshal chunk: %w", err)
+	}
+	if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", encoded)); err != nil {
+		return fmt.Errorf("deepseek-web: write chunk: %w", err)
+	}
+	if _, err := hw.Write([]byte("data: [DONE]\n\n")); err != nil {
+		return fmt.Errorf("deepseek-web: write terminator: %w", err)
+	}
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return nil
 }
 
 // deepSeekWriteStreamedMessage writes one buffered message in the SSE shape a

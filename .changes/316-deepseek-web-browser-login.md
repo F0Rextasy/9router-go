@@ -413,3 +413,26 @@ Verified against the polluted history itself: five live turns with the failed
 result in context, four now detect the failure and re-fetch instead of inventing
 data. One still answered from memory — a prompt rule is a strong nudge, not a
 guarantee, which is why the transcript repair above matters too.
+
+### fix(deepseek-web): number streamed tool calls so a client can tell them apart
+
+`tool_calls[].index` was missing. The OpenAI streaming protocol numbers every
+parallel call in `tool_calls[].index` and clients key their accumulator by that
+number, so a client receiving two calls with no index had nothing to separate them
+with and concatenated both argument objects:
+
+```
+Validation failed for tool "bash": Tool call arguments are not valid JSON.
+Parse Error: Unexpected trailing characters at position 2
+Raw JSON: {}{}
+```
+
+The two calls were both correct; they were simply indistinguishable. The stream
+now emits one frame per call, each carrying `index` 0..n-1, which is the shape
+every other executor in this repository already uses
+(`internal/proxy/executor/stream.go`, tool-call emission). The model's prose still
+travels with the first frame, and the turn keeps its `finish_reason: tool_calls`
+and `[DONE]` terminator.
+
+`deepseek_web_stream_test.go` parses the emitted frames the way a streaming client
+does and fails against the previous single-frame writer.
