@@ -46,17 +46,27 @@ func deepSeekToolTurnToClient(w http.ResponseWriter, req *Request, upstream io.R
 	}
 
 	text := accumulator.contentText()
-	if call, ok := deepSeekExtractToolCall(text, envelope.Tools); ok {
-		// Anything the model wrote around the JSON object is real content and
-		// belongs to the client. Dropping it produces a message with null
-		// content, which an agent reads as an empty stop and retries — the
-		// model was answering, the wrapper threw the answer away.
-		if !req.IsStream {
-			return deepSeekWriteToolCall(w, req, envelope.Model, call,
-				deepSeekSurroundingText(text, call.Raw))
+	calls := deepSeekExtractToolCalls(text, envelope.Tools)
+	if len(calls) > 0 {
+		// Anything the model wrote around the calls is real content and belongs
+		// to the client. Dropping it produces a message with null content, which
+		// an agent reads as an empty stop and retries — the model was answering,
+		// the wrapper threw the answer away.
+		//
+		// The text is taken once for the whole turn rather than per call: with
+		// several invokes in one answer the calls are what was removed, and
+		// running the helper per call would re-scan a shrinking answer for
+		// brackets that are no longer there.
+		raws := make([]string, 0, len(calls))
+		for _, call := range calls {
+			raws = append(raws, call.Raw)
 		}
-		return deepSeekWriteStreamedToolCall(w, req, envelope.Model, call,
-			deepSeekSurroundingText(text, call.Raw))
+		preamble := deepSeekSurroundingText(text, raws...)
+
+		if !req.IsStream {
+			return deepSeekWriteToolCalls(w, req, envelope.Model, calls, preamble)
+		}
+		return deepSeekWriteStreamedToolCalls(w, req, envelope.Model, calls, preamble)
 	}
 	// A DSML block that named a tool the client never declared, or that named one
 	// at all, is markup rather than an answer. Leaving it in shows the user a wall
@@ -97,9 +107,14 @@ func deepSeekToolPlainText(accumulator *deepSeekStreamAccumulator) string {
 }
 
 // deepSeekWriteToolCall answers with an OpenAI tool_calls message, keeping any
-// text the model wrote around the object.
+// text the model wrote around the calls.
 func deepSeekWriteToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
-	return deepSeekWriteJSON(w, req, model, deepSeekToolCallMessage(call, preamble))
+	return deepSeekWriteToolCalls(w, req, model, []deepSeekToolRequest{call}, preamble)
+}
+
+// deepSeekWriteToolCalls answers with an OpenAI tool_calls message.
+func deepSeekWriteToolCalls(w http.ResponseWriter, req *Request, model string, calls []deepSeekToolRequest, preamble string) error {
+	return deepSeekWriteJSON(w, req, model, deepSeekToolCallMessage(calls, preamble))
 }
 
 // deepSeekWritePlainAnswer answers with the model's text when no declared tool
@@ -154,11 +169,21 @@ func deepSeekWriteStreamedAnswer(w http.ResponseWriter, req *Request, model stri
 	}, deepSeekReasoningDelta(accumulator))
 }
 
-// deepSeekWriteStreamedToolCall emits a tool call as SSE. The arguments go out
-// as one delta rather than per-character ones: the whole point of buffering was
-// to get them whole, and a client reassembles them from a single frame correctly.
+// deepSeekWriteStreamedToolCall emits one tool call as SSE.
 func deepSeekWriteStreamedToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
-	return deepSeekWriteStreamedMessage(w, req, model, deepSeekToolCallMessage(call, preamble), nil)
+	return deepSeekWriteStreamedToolCalls(w, req, model, []deepSeekToolRequest{call}, preamble)
+}
+
+// deepSeekWriteStreamedToolCalls emits every recovered call as SSE. The arguments
+// go out as one delta rather than per-character ones: the whole point of buffering
+// was to get them whole, and a client reassembles them from a single frame
+// correctly.
+//
+// All the calls travel in one frame. Splitting them across frames would make the
+// client start executing the first while the rest are still in flight — and a
+// model that answered about two cities meant its two calls to run together.
+func deepSeekWriteStreamedToolCalls(w http.ResponseWriter, req *Request, model string, calls []deepSeekToolRequest, preamble string) error {
+	return deepSeekWriteStreamedMessage(w, req, model, deepSeekToolCallMessage(calls, preamble), nil)
 }
 
 // deepSeekWriteStreamedMessage writes one buffered message in the SSE shape a
@@ -232,19 +257,23 @@ func deepSeekWriteStreamedMessage(w http.ResponseWriter, req *Request, model str
 }
 
 // deepSeekToolCallMessage builds the tool_calls message, keeping any text the
-// model wrote around the object.
-func deepSeekToolCallMessage(call deepSeekToolRequest, preamble string) map[string]any {
-	message := map[string]any{
-		"role":    "assistant",
-		"content": nil,
-		"tool_calls": []any{map[string]any{
+// model wrote around the calls.
+func deepSeekToolCallMessage(calls []deepSeekToolRequest, preamble string) map[string]any {
+	list := make([]any, 0, len(calls))
+	for _, call := range calls {
+		list = append(list, map[string]any{
 			"id":   deepSeekToolCallID(call.Name),
 			"type": "function",
 			"function": map[string]any{
 				"name":      call.Name,
 				"arguments": call.Arguments,
 			},
-		}},
+		})
+	}
+	message := map[string]any{
+		"role":       "assistant",
+		"content":    nil,
+		"tool_calls": list,
 	}
 	if preamble != "" {
 		message["content"] = preamble

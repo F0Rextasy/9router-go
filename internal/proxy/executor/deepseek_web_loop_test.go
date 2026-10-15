@@ -72,7 +72,7 @@ func TestDeepSeekToolCallKeepsSurroundingText(t *testing.T) {
 	answer := `Let me check that for you.` + "\n" +
 		`{"name":"get_weather","arguments":{"city":"Jakarta"}}`
 
-	call, ok := deepSeekExtractToolCall(answer, tools)
+	call, ok := extractOne(answer, tools)
 	if !ok {
 		t.Fatal("a call with prose around it must still be recognised")
 	}
@@ -91,7 +91,7 @@ func TestDeepSeekToolCallWithoutProseHasNoPreamble(t *testing.T) {
 	}()}
 
 	answer := `{"name":"get_weather","arguments":{"city":"Jakarta"}}`
-	call, ok := deepSeekExtractToolCall(answer, tools)
+	call, ok := extractOne(answer, tools)
 	if !ok {
 		t.Fatal("call not recognised")
 	}
@@ -108,7 +108,7 @@ func TestDeepSeekUndeclaredToolIsRejected(t *testing.T) {
 	declared.Function.Description = "weather"
 
 	answer := `{"name":"delete_everything","arguments":{"path":"/"}}`
-	if _, ok := deepSeekExtractToolCall(answer, []deepSeekToolSpec{declared}); ok {
+	if _, ok := extractOne(answer, []deepSeekToolSpec{declared}); ok {
 		t.Error("a tool the client never declared must not be returned as a call")
 	}
 }

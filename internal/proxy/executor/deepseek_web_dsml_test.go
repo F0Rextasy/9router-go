@@ -39,7 +39,7 @@ func readTool() deepSeekToolSpec {
 // parser never matched the real closing tags. The client then had no call to run
 // and read the whole turn as a refusal.
 func TestDeepSeekExtractsDSMLToolCall(t *testing.T) {
-	call, ok := deepSeekExtractToolCall(liveDSMLAnswer, []deepSeekToolSpec{readTool()})
+	call, ok := extractOne(liveDSMLAnswer, []deepSeekToolSpec{readTool()})
 	if !ok {
 		t.Fatal("a DSML call was not recognised")
 	}
@@ -79,7 +79,7 @@ func TestDeepSeekDSMLAcceptsBothCloseSpellings(t *testing.T) {
 				"<｜｜DSML｜｜ parameter name=\"path\" string=\"true\">/tmp/x</｜｜DSML｜｜ parameter>" +
 				tt.close
 
-			call, ok := deepSeekExtractToolCall(answer, []deepSeekToolSpec{readTool()})
+			call, ok := extractOne(answer, []deepSeekToolSpec{readTool()})
 			if !ok {
 				t.Fatalf("close tag %q was not recognised", tt.close)
 			}
@@ -97,7 +97,7 @@ func TestDeepSeekDSMLAcceptsASCIIPipe(t *testing.T) {
 		"<||DSML|| parameter name=\"path\" string=\"true\">/tmp/x</||DSML|| parameter>" +
 		"</||DSML|| invoke>"
 
-	call, ok := deepSeekExtractToolCall(answer, []deepSeekToolSpec{readTool()})
+	call, ok := extractOne(answer, []deepSeekToolSpec{readTool()})
 	if !ok {
 		t.Fatal("an ASCII-pipe block was not recognised")
 	}
@@ -113,7 +113,7 @@ func TestDeepSeekDSMLKeepsParameterTextVerbatim(t *testing.T) {
 		"<｜｜DSML｜｜ parameter name=\"path\" string=\"true\">a \"quoted\" value</｜｜DSML｜｜ parameter>" +
 		"</｜｜DSML｜｜ invoke>"
 
-	call, ok := deepSeekExtractToolCall(answer, []deepSeekToolSpec{readTool()})
+	call, ok := extractOne(answer, []deepSeekToolSpec{readTool()})
 	if !ok {
 		t.Fatal("a single un-wrapped invoke was not recognised")
 	}
@@ -135,7 +135,7 @@ func TestDeepSeekDSMLUndeclaredToolIsRejected(t *testing.T) {
 		"<｜｜DSML｜｜ parameter name=\"path\" string=\"true\">/</｜｜DSML｜｜ parameter>" +
 		"</｜｜DSML｜｜ invoke>"
 
-	if _, ok := deepSeekExtractToolCall(answer, []deepSeekToolSpec{readTool()}); ok {
+	if _, ok := extractOne(answer, []deepSeekToolSpec{readTool()}); ok {
 		t.Error("a tool the client never declared must not be returned as a call")
 	}
 }
@@ -174,7 +174,7 @@ func TestDeepSeekDSMLAttributeMatchesWholeName(t *testing.T) {
 func TestDeepSeekDSMLTruncatedBlockIsSafe(t *testing.T) {
 	truncated := "<｜｜DSML｜｜ calls>\n<｜｜DSML｜｜ invoke name=\"read\">\n" +
 		"<｜｜DSML｜｜ parameter name=\"path\" string=\"true\">half"
-	if _, ok := deepSeekExtractToolCall(truncated, []deepSeekToolSpec{readTool()}); ok {
+	if _, ok := extractOne(truncated, []deepSeekToolSpec{readTool()}); ok {
 		t.Error("a truncated block must not be parsed as a call")
 	}
 	if got := deepSeekStripDSML(truncated); got != "" {
@@ -185,7 +185,7 @@ func TestDeepSeekDSMLTruncatedBlockIsSafe(t *testing.T) {
 // DSML must not shadow the JSON path: an answer with no markers is still read as
 // JSON, and an answer with markers is read as DSML.
 func TestDeepSeekJSONPathUnaffectedByDSML(t *testing.T) {
-	call, ok := deepSeekExtractToolCall(
+	call, ok := extractOne(
 		`{"name":"read","arguments":{"path":"/tmp/x"}}`,
 		[]deepSeekToolSpec{readTool()})
 	if !ok {
@@ -209,5 +209,97 @@ func TestDeepSeekDSMLReadsEveryInvoke(t *testing.T) {
 	}
 	if !strings.Contains(invokes[1], "Tokyo") {
 		t.Errorf("second invoke is not the Tokyo one:\n%s", invokes[1])
+	}
+}
+
+// extractOne runs the real extraction path and returns the first call, for the
+// many tests that assert on a single one.
+func extractOne(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
+	calls := deepSeekExtractToolCalls(text, tools)
+	if len(calls) == 0 {
+		return deepSeekToolRequest{}, false
+	}
+	return calls[0], true
+}
+
+// twoCityAnswer is the shape a live model produced for "check the weather in
+// Jakarta and Tokyo": two invokes inside one calls element. The wrapper is the
+// part that leaked — the parser consumed the invokes and handed the `calls` tags
+// to the client as assistant content, so every turn showed the user an empty pair
+// of tags under their own question.
+const twoCityAnswer = "<\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>\n" +
+	"<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"read\">\n" +
+	"<\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter name=\"path\" string=\"true\">https://wttr.in/Jakarta?format=j1</\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter>\n" +
+	"</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>\n" +
+	"<\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke name=\"read\">\n" +
+	"<\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter name=\"path\" string=\"true\">https://wttr.in/Tokyo?format=j1</\uFF5C\uFF5CDSML\uFF5C\uFF5C parameter>\n" +
+	"</\uFF5C\uFF5CDSML\uFF5C\uFF5C invoke>\n" +
+	"</\uFF5C\uFF5CDSML\uFF5C\uFF5C calls>"
+
+// TestDeepSeekDSMLPreambleHasNoWrapper is the regression for the leak the user
+// reported twice: the calls element that encloses the invokes must not survive
+// into the assistant's content.
+func TestDeepSeekDSMLPreambleHasNoWrapper(t *testing.T) {
+	calls := deepSeekExtractToolCalls(twoCityAnswer, []deepSeekToolSpec{readTool()})
+	if len(calls) != 2 {
+		t.Fatalf("extracted %d calls, want 2", len(calls))
+	}
+
+	raws := make([]string, 0, len(calls))
+	for _, call := range calls {
+		raws = append(raws, call.Raw)
+	}
+	preamble := deepSeekSurroundingText(twoCityAnswer, raws...)
+
+	if strings.Contains(preamble, "DSML") {
+		t.Fatalf("the calls wrapper leaked as content: %q", preamble)
+	}
+	if preamble != "" {
+		t.Fatalf("preamble = %q, want empty: the model wrote no prose around its calls", preamble)
+	}
+}
+
+// TestDeepSeekDSMLReadsEveryInvokeInOneAnswer pins the multi-call behaviour: a
+// model answering about two cities in one reply must not cost two round trips.
+func TestDeepSeekDSMLReadsEveryInvokeInOneAnswer(t *testing.T) {
+	calls := deepSeekExtractToolCalls(twoCityAnswer, []deepSeekToolSpec{readTool()})
+	if len(calls) != 2 {
+		t.Fatalf("extracted %d calls, want 2", len(calls))
+	}
+	for i, want := range []string{"Jakarta", "Tokyo"} {
+		if !strings.Contains(calls[i].Arguments, want) {
+			t.Errorf("call %d arguments = %s, want it to mention %s", i, calls[i].Arguments, want)
+		}
+	}
+}
+
+// TestDeepSeekDSMLRepeatedInvokeRunsOnce keeps a model that writes the same call
+// twice from having the client execute it twice.
+func TestDeepSeekDSMLRepeatedInvokeRunsOnce(t *testing.T) {
+	answer := twoCityAnswer + "\n" + twoCityAnswer
+	calls := deepSeekExtractToolCalls(answer, []deepSeekToolSpec{readTool()})
+	if len(calls) != 2 {
+		t.Fatalf("extracted %d calls, want 2 after de-duplication", len(calls))
+	}
+}
+
+// TestDeepSeekDSMLStillKeepsProseAroundTheBlock guards the strip: text the model
+// wrote outside a calls element is content and must survive.
+func TestDeepSeekDSMLStillKeepsProseAroundTheBlock(t *testing.T) {
+	answer := "Let me look at both cities.\n" + twoCityAnswer + "\nThen I will summarise."
+	calls := deepSeekExtractToolCalls(answer, []deepSeekToolSpec{readTool()})
+
+	raws := make([]string, 0, len(calls))
+	for _, call := range calls {
+		raws = append(raws, call.Raw)
+	}
+	preamble := deepSeekSurroundingText(answer, raws...)
+
+	if strings.Contains(preamble, "DSML") {
+		t.Fatalf("markup leaked: %q", preamble)
+	}
+	if !strings.Contains(preamble, "Let me look at both cities.") ||
+		!strings.Contains(preamble, "Then I will summarise.") {
+		t.Fatalf("prose around the block was lost: %q", preamble)
 	}
 }

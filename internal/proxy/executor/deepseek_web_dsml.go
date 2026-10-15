@@ -33,6 +33,12 @@ import (
 // -1, the whole block stayed unparsed, and every DSML call reached the client as
 // literal markup. A parser must key on what the model writes, not on how the
 // notation reads when described.
+//
+// The `calls` element matters for the same reason. A model wraps its invokes in
+// one, and an extractor that consumed only the invoke left the wrapper behind.
+// The caller kept the text around the call as the assistant's preamble — which is
+// correct for prose — so `<｜｜DSML｜｜ calls>` and its closer were handed to the
+// client as content. Every turn showed the user an empty pair of tags.
 
 var (
 	// deepSeekDSMLMarker recognises the namespace in any spelling, and is what
@@ -42,16 +48,15 @@ var (
 	// An opening tag is `<` followed by the namespace. It cannot match a closing
 	// tag, whose `<` is followed by `/` — so a scan for openers never trips over
 	// a terminator.
+	deepSeekDSMLBlockOpen     = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}`)
+	deepSeekDSMLCallsOpen     = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*calls\b`)
 	deepSeekDSMLInvokeOpen    = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*invoke\b`)
 	deepSeekDSMLParameterOpen = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*parameter\b`)
 
 	// A closing tag may or may not carry the slash, so `/?` is deliberate.
+	deepSeekDSMLCallsClose     = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*calls\s*>`)
 	deepSeekDSMLInvokeClose    = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*invoke\s*>`)
 	deepSeekDSMLParameterClose = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*parameter\s*>`)
-	deepSeekDSMLCallsClose     = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*calls\s*>`)
-
-	// deepSeekDSMLBlockOpen marks the start of a block for the stripper.
-	deepSeekDSMLBlockOpen = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}`)
 )
 
 // deepSeekHasDSML reports whether an answer contains the namespace at all.
@@ -59,19 +64,42 @@ func deepSeekHasDSML(text string) bool {
 	return deepSeekDSMLMarker.MatchString(text)
 }
 
-// deepSeekExtractDSML recovers a tool call written in DSML.
+// deepSeekExtractDSML recovers every tool call written in DSML.
 //
-// Only an invoke naming a tool the client declared is returned. A model that
-// invents a tool name is passed through as content — the same conservative rule
-// the JSON path follows, for the same reason: guessing produces an invocation the
-// client then acts on.
-func deepSeekExtractDSML(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
-	for _, invoke := range deepSeekDSMLInvokes(text) {
-		if call, ok := deepSeekParseDSMLInvoke(invoke, tools); ok {
-			return call, true
-		}
+// All of them, not just the first: a model asked about two cities writes two
+// invokes in one answer, and returning only the first costs the client a whole
+// round trip per call — and leaves the second invoke sitting in the answer as
+// markup, which is the leak this function exists to prevent.
+//
+// Only invokes naming a tool the client declared are returned. A model that
+// invents a tool name is passed over — the same conservative rule the JSON path
+// follows, for the same reason: guessing produces an invocation the client then
+// acts on.
+func deepSeekExtractDSML(text string, tools []deepSeekToolSpec) []deepSeekToolRequest {
+	invokes := deepSeekDSMLInvokes(text)
+	if len(invokes) == 0 {
+		return nil
 	}
-	return deepSeekToolRequest{}, false
+
+	calls := make([]deepSeekToolRequest, 0, len(invokes))
+	for _, invoke := range invokes {
+		call, ok := deepSeekParseDSMLInvoke(invoke, tools)
+		if !ok {
+			continue
+		}
+		// A model that repeats the same invoke in one answer would otherwise
+		// have the client execute it twice.
+		if slices.ContainsFunc(calls, func(existing deepSeekToolRequest) bool {
+			return existing.Name == call.Name && existing.Arguments == call.Arguments
+		}) {
+			continue
+		}
+		calls = append(calls, call)
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	return calls
 }
 
 // deepSeekDSMLInvokes returns every invoke element in the answer, verbatim.
@@ -233,32 +261,44 @@ func deepSeekDSMLValue(body string) string {
 	return string(encoded)
 }
 
-// deepSeekStripDSML removes a DSML block from an answer.
+// deepSeekStripDSML removes a DSML element from an answer.
 //
-// Used only when the block could not be turned into a call — an undeclared tool
-// name, say. Leaving it in shows the user raw markup for something meant to be a
-// tool call, which reads as corruption.
+// Used wherever the markup could otherwise reach the user: a block that could not
+// be turned into a call, and the text around a block that could.
+//
+// The whole element goes, from its opening tag to its terminator, because what
+// lies between them is markup too — stripping only the tags would leave the
+// parameter bodies behind, so `https://wttr.in/Jakarta` would appear as prose the
+// model never wrote. An element that was never closed is treated as running to
+// the end of the answer: the model was cut off mid-call, and everything after the
+// marker is unfinished markup rather than a sentence.
 func deepSeekStripDSML(text string) string {
-	openAt := deepSeekDSMLBlockOpen.FindStringIndex(text)
-	if openAt == nil {
-		return text
+	for _, element := range []struct {
+		open  *regexp.Regexp
+		close *regexp.Regexp
+	}{
+		{deepSeekDSMLCallsOpen, deepSeekDSMLCallsClose},
+		{deepSeekDSMLInvokeOpen, deepSeekDSMLInvokeClose},
+		{deepSeekDSMLParameterOpen, deepSeekDSMLParameterClose},
+	} {
+		openAt := element.open.FindStringIndex(text)
+		if openAt == nil {
+			continue
+		}
+		// The search for the terminator begins after the opening tag. Starting at
+		// the element itself would match that very tag — the close pattern admits
+		// a missing slash — and truncate the element at its own first tag,
+		// leaving the rest of the markup in place.
+		searchFrom := openAt[1]
+		if tagEnd := strings.Index(text[searchFrom:], ">"); tagEnd >= 0 {
+			searchFrom += tagEnd + 1
+		}
+		if end := element.close.FindStringIndex(text[searchFrom:]); end != nil {
+			return strings.TrimSpace(text[:openAt[0]] + text[searchFrom+end[1]:])
+		}
+		return strings.TrimSpace(text[:openAt[0]])
 	}
-	start := openAt[0]
-
-	// The search for the terminator begins after the opening element. Starting at
-	// the block itself would match that opening tag — the close pattern admits a
-	// missing slash — and truncate the block to its own first tag, leaving the
-	// rest of the markup in place.
-	searchFrom := openAt[1]
-	if tagEnd := strings.Index(text[searchFrom:], ">"); tagEnd >= 0 {
-		searchFrom += tagEnd + 1
-	}
-	if end := deepSeekDSMLCallsClose.FindStringIndex(text[searchFrom:]); end != nil {
-		return strings.TrimSpace(text[:start] + text[searchFrom+end[1]:])
-	}
-	// The model was cut off partway through writing the block: everything from
-	// the marker on is unfinished markup, not an answer.
-	return strings.TrimSpace(text[:start])
+	return text
 }
 
 // deepSeekDSMLInvokeCount reports how many invokes an answer carries, for the log.

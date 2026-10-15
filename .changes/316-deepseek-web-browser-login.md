@@ -343,3 +343,33 @@ the upstream OmniRoute prompt does.
 `deepseek_web_transcript_test.go` drives the transcript with the assistant turn
 copied byte for byte out of the leaking request, and fails against the previous
 renderer.
+
+### fix(deepseek-web): stop leaking the DSML wrapper and run every call in an answer
+
+A model wraps its invokes in a `.calls` element, and the extractor consumed only
+the `invoke`. The wrapper was left over, and the text around a call is returned to
+the client as the assistant's preamble — correct for prose that a model writes
+before its call, wrong for markup that happened to enclose it. So every tool turn
+was answered with `content: "<｜｜DSML｜｜ calls></｜｜DSML｜｜ calls>"` alongside a
+perfectly good `tool_calls` array. The user saw an empty pair of tags under their
+own question on every round.
+
+Two changes:
+
+- `deepSeekStripDSML` removes a whole element, from its opening tag to its
+  terminator, for `calls`, `invoke` and `parameter`. Removing only the tags would
+  leave the parameter bodies behind as prose the model never wrote.
+- `deepSeekSurroundingText` strips markup from what it returns, so a wrapper
+  cannot reach the client however it is spelled. It now takes every raw call at
+  once, since the text between several calls is only correct when they are removed
+  together.
+
+An answer is also no longer assumed to hold one call. A model asked about two
+cities writes two invokes in a single reply; the gateway returned the first and
+the client paid a round trip for each, with the remaining call left in the answer
+as markup. `deepSeekExtractToolCalls` returns all of them, de-duplicated by name
+and arguments so a repeated invoke is not executed twice, and the streaming path
+puts them in one frame so the client runs them together.
+
+`go test ./...` green; 6 live turns through `combo-wombo` returned zero leaked
+markup, and the exact polluted history the user reported now answers in prose.

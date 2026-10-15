@@ -154,19 +154,23 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 	return b.String()
 }
 
-// deepSeekExtractToolCall recovers a tool call from the model's answer.
+// deepSeekExtractToolCalls recovers every tool call from the model's answer.
 //
 // The prompt asks for JSON and the model usually complies, but these models also
 // have a native tool syntax they reach for on their own. Both are read here, and
 // DSML is tried first: it is unambiguous, where a JSON-shaped object sitting in
 // prose has to be guessed at.
 //
-// It is deliberately conservative. The answer must name one of the tools the
+// A plural answer, not a singular one: a model asked about two cities writes two
+// invokes in a single reply. Returning only the first would cost the client a
+// round trip per call and leave the rest of the block in the answer as markup.
+//
+// It is deliberately conservative. Every call must name one of the tools the
 // client declared, in either dialect. Anything else — prose, an undeclared name,
-// malformed JSON — returns false and reaches the client as ordinary content.
+// malformed JSON — returns nothing and reaches the client as ordinary content.
 // Guessing here would turn a failed parse into an invocation the client then
 // acts on.
-func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
+func deepSeekExtractToolCalls(text string, tools []deepSeekToolSpec) []deepSeekToolRequest {
 	raw := strings.TrimSpace(text)
 	if deepSeekHasDSML(raw) {
 		return deepSeekExtractDSML(raw, tools)
@@ -178,7 +182,7 @@ func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToo
 	// what produced content:null and an agent retry loop.
 	obj := deepSeekFindJSONObject(raw)
 	if obj == "" {
-		return deepSeekToolRequest{}, false
+		return nil
 	}
 
 	var call struct {
@@ -189,7 +193,7 @@ func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToo
 		Params jsontext.Value `json:"parameters"`
 	}
 	if err := json.Unmarshal([]byte(obj), &call); err != nil {
-		return deepSeekToolRequest{}, false
+		return nil
 	}
 
 	arguments := call.Arguments
@@ -197,17 +201,17 @@ func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToo
 		arguments = call.Params
 	}
 	if call.Name == "" || !deepSeekToolDeclared(call.Name, tools) {
-		return deepSeekToolRequest{}, false
+		return nil
 	}
 
 	encoded := "{}"
 	if len(arguments) > 0 {
 		if !deepSeekValidJSON(string(arguments)) {
-			return deepSeekToolRequest{}, false
+			return nil
 		}
 		encoded = string(arguments)
 	}
-	return deepSeekToolRequest{Name: call.Name, Arguments: encoded, Raw: obj}, true
+	return []deepSeekToolRequest{{Name: call.Name, Arguments: encoded, Raw: obj}}
 }
 
 // deepSeekToolDeclared reports whether the client asked for this tool. A model
@@ -239,33 +243,41 @@ func deepSeekToolCallID(name string) string {
 }
 
 // deepSeekSurroundingText returns what the model wrote before and after the tool
-// call object, with the object itself removed.
+// calls, with the calls themselves removed.
 //
 // This is what stops an agent from seeing an empty stop. A model that says "Let me
-// check that for you." and then emits the object has answered twice over; the
+// check that for you." and then emits its call has answered twice over; the
 // wrapper used to keep only the second half, so the client received
 // `content: null` and concluded the model had said nothing.
-func deepSeekSurroundingText(answer, raw string) string {
-	if raw == "" {
+//
+// Only text is meant to come back. The model writes its calls wrapped — a DSML
+// answer puts the invokes inside a `calls` element — and that wrapper is markup,
+// not a preamble. Leaving it in is how a client ends up showing the user an empty
+// `<｜｜DSML｜｜ calls></｜｜DSML｜｜ calls>` under their own question: the calls ran
+// correctly and the tags that enclosed them were handed over as assistant text.
+func deepSeekSurroundingText(answer string, raws ...string) string {
+	if answer == "" || len(raws) == 0 {
 		return ""
 	}
-	idx := strings.Index(answer, raw)
-	if idx < 0 {
-		return ""
-	}
-	before := strings.TrimSpace(answer[:idx])
-	after := strings.TrimSpace(answer[idx+len(raw):])
-	after = strings.TrimSpace(strings.Trim(after, "`"))
-	after = strings.TrimSpace(strings.TrimPrefix(after, "json"))
 
-	switch {
-	case before == "":
-		return after
-	case after == "":
-		return before
-	default:
-		return before + "\n" + after
+	remaining := answer
+	surrounding := ""
+	for _, raw := range raws {
+		if raw == "" {
+			continue
+		}
+		idx := strings.Index(remaining, raw)
+		if idx < 0 {
+			continue
+		}
+		surrounding += remaining[:idx]
+		remaining = remaining[idx+len(raw):]
 	}
+	surrounding += remaining
+
+	surrounding = strings.TrimSpace(deepSeekDsmlStripped(surrounding))
+	surrounding = strings.TrimSpace(strings.Trim(surrounding, "`"))
+	return strings.TrimSpace(strings.TrimPrefix(surrounding, "json"))
 }
 
 // deepSeekFindJSONObject returns the first balanced top-level JSON object in s.

@@ -55,7 +55,7 @@ func TestDeepSeekDSMLMatchesClaudeShapedDeclaration(t *testing.T) {
 		"<｜｜DSML｜｜ parameter name=\"query\" string=\"true\">jakarta<｜｜DSML｜｜ parameter>" +
 		"<｜｜DSML｜｜ invoke>"
 
-	call, ok := deepSeekExtractToolCall(answer, tools)
+	call, ok := extractOne(answer, tools)
 	if !ok {
 		t.Fatal("a call against a Claude-shaped declaration was rejected")
 	}
