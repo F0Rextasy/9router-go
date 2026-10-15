@@ -94,21 +94,15 @@ func deepSeekMessagesToPrompt(messages []deepSeekMessage, historyWindow int) str
 				systemParts = append(systemParts, text)
 			}
 		case "user", "assistant":
-			// An assistant turn that ended in a tool call usually carries
-			// content:null, so nothing would be recorded and the replay would
-			// show a tool result with no call that produced it. The model then
-			// cannot tell it already asked, and asks again — forever. The call
-			// itself has to be part of the transcript for the loop to close.
-			if text != "" {
-				conversation = append(conversation, deepSeekTurnLine{role: message.Role, text: text})
-			} else if message.Role == "assistant" {
-				if call := deepSeekRenderToolCalls(message.ToolCalls); call != "" {
-					conversation = append(conversation, deepSeekTurnLine{role: "assistant", text: call})
-				}
-			}
 			if message.Role == "user" {
+				if text != "" {
+					conversation = append(conversation, deepSeekTurnLine{role: "user", text: text})
+				}
 				lastUser = text
+				deepSeekCollectToolNames(message.ToolCalls, toolNames)
+				break
 			}
+			conversation = deepSeekAppendAssistant(conversation, text, message.ToolCalls)
 			deepSeekCollectToolNames(message.ToolCalls, toolNames)
 		case "tool":
 			if text == "" {
@@ -272,4 +266,101 @@ func deepSeekRenderToolCalls(toolCalls jsontext.Value) string {
 		return ""
 	}
 	return strings.Join(lines, "\n")
+}
+
+// deepSeekAppendAssistant records an assistant turn, repairing one that the
+// extractor let through as text.
+//
+// When the model answers with a tool call the gateway recognises, the call is
+// returned to the client and the transcript reads it back as a `[called …]`
+// line. But when the extractor cannot recognise the call — an answer built out of
+// invoke/parameter elements is one that can happen — the text is passed through
+// as content, and the client sends it back in the next request. Replaying it
+// verbatim teaches the model that markup is how this conversation calls tools:
+// it sees its own unparsed call in the transcript and repeats it, every turn,
+// with the round always one step behind what the client actually executed.
+//
+// So a recognised call is rendered from tool_calls, and any leftover text is
+// dropped as the scaffolding it is. Text carrying no markup is kept as before.
+func deepSeekAppendAssistant(conversation []deepSeekTurnLine, text string, toolCalls jsontext.Value) []deepSeekTurnLine {
+	call := deepSeekRenderToolCalls(toolCalls)
+
+	kept := deepSeekDsmlStripped(text)
+	// A JSON call object is the other dialect the extractor reads, and one that
+	// reached the client as content is replayed here for the same reason markup
+	// is not: it shows the model that answering with a bare object is accepted.
+	// Only the object goes, and only when it really is a call — an answer that
+	// merely contains a JSON fragment the extractor rejected is left alone.
+	if called, ok := deepSeekFindToolCallObject(kept); ok && called != "" {
+		kept = deepSeekRemoveObject(kept, called)
+	}
+
+	if call != "" {
+		if kept != "" {
+			conversation = append(conversation, deepSeekTurnLine{role: "assistant", text: kept})
+		}
+		return append(conversation, deepSeekTurnLine{role: "assistant", text: call})
+	}
+	if kept != "" {
+		return append(conversation, deepSeekTurnLine{role: "assistant", text: kept})
+	}
+	// Nothing but markup: the turn was a call, and saying so beats leaving a gap
+	// the model reads as never having called anything.
+	if summary := deepSeekMarkupCallSummary(text); summary != "" {
+		return append(conversation, deepSeekTurnLine{role: "assistant", text: summary})
+	}
+	return conversation
+}
+
+// deepSeekDsmlStripped removes a DSML block if the text carries one.
+func deepSeekDsmlStripped(text string) string {
+	if !deepSeekHasDSML(text) {
+		return text
+	}
+	return deepSeekStripDSML(text)
+}
+
+// deepSeekFindToolCallObject returns the JSON object in the text when it really
+// is a tool call, so the transcript can drop it.
+//
+// The test is the object's shape, not the answer's: a fragment that happens to
+// be JSON but declares no tool stays where it is.
+func deepSeekFindToolCallObject(text string) (string, bool) {
+	obj := deepSeekFindJSONObject(text)
+	if obj == "" {
+		return "", false
+	}
+	var call struct {
+		Name string         `json:"name"`
+		Args jsontext.Value `json:"arguments"`
+		Para jsontext.Value `json:"parameters"`
+	}
+	if err := json.Unmarshal([]byte(obj), &call); err != nil || call.Name == "" {
+		return "", false
+	}
+	if len(call.Args) == 0 && len(call.Para) == 0 {
+		return "", false
+	}
+	return obj, true
+}
+
+// deepSeekRemoveObject deletes the first occurrence of an object from the text.
+func deepSeekRemoveObject(text, obj string) string {
+	return strings.TrimSpace(strings.Replace(text, obj, "", 1))
+}
+
+// deepSeekMarkupCallSummary describes an assistant turn that was nothing but
+// markup, so the transcript shows a call rather than an empty assistant turn.
+func deepSeekMarkupCallSummary(text string) string {
+	names := make([]string, 0, 2)
+	for _, invoke := range deepSeekDSMLInvokes(text) {
+		attributes, _, _ := strings.Cut(invoke, ">")
+		if name := deepSeekDSMLAttribute(attributes, "name"); name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "[called " + strings.Join(names, ", ") + "]"
 }

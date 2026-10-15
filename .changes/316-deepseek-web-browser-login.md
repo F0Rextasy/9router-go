@@ -318,3 +318,28 @@ block at its own first tag.
 answer rather than reconstructed, and additionally pins both close spellings, the
 ASCII pipe, and that both invokes in the live block are recovered in order. The
 suite fails against the previous parser.
+
+### fix(deepseek-web): stop replaying leaked markup back into the conversation
+
+A leaked DSML block is not only shown to the user, it is fed back to the model.
+The client returns the assistant turn in the next request, and the transcript
+renderer replayed its content verbatim, so the model read its own unparsed
+`<｜｜DSML｜｜ invoke>` block as the way this conversation calls tools and answered
+with another one. Every turn leaked again, and each round described the previous
+one: the calls the user saw executed (`Read Jakarta`, `Read Tokyo`) came a turn
+behind the answer that followed them.
+
+An assistant turn is now repaired before it is replayed. A DSML block is stripped,
+and a JSON object is dropped only when it is shaped like a call — `name` plus
+`arguments` or `parameters` — so prose that merely contains JSON is left alone.
+When nothing but markup remains, the turn is recorded as `[called read]` rather
+than dropped, because an empty assistant turn reads to the model as never having
+called anything, which is the retry loop fixed earlier.
+
+The tool prompt also states that native markup is not transmitted and that a reply
+made of `invoke`/`parameter`/`calls` elements is discarded unread, which is what
+the upstream OmniRoute prompt does.
+
+`deepseek_web_transcript_test.go` drives the transcript with the assistant turn
+copied byte for byte out of the leaking request, and fails against the previous
+renderer.

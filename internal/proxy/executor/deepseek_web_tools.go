@@ -139,8 +139,12 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 	}
 	b.WriteString("</tools>\n\n")
 	b.WriteString("To use a tool, reply with a single JSON object and nothing else: " +
-		`{"name": "<tool name>", "arguments": {<arguments matching that tool's parameters>}}. ` +
+		`{"name": "<tool name>", "arguments": {<arguments matching that tool's parameters>}}` + ". " +
 		"Do not wrap it in prose or a code fence.")
+	b.WriteString("\n\nThe tool syntax above is the only one this client understands. " +
+		"Native markup is not transmitted: a reply made of `invoke`, `parameter` or " +
+		"`calls` elements — including any spelled with a DSML namespace — is discarded " +
+		"unread, and you will appear to have answered nothing.\n")
 	b.WriteString("\n\nRules for using tools:\n")
 	b.WriteString("- A line reading \"[called <name> with <arguments>]\" means you already " +
 		"made that call and its result is the following \"Tool result\" line. Do not repeat it.\n")
