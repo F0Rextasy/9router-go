@@ -37,8 +37,12 @@ func deepSeekToolTurnToClient(w http.ResponseWriter, req *Request, upstream io.R
 		// The same rule as the streaming path: a turn the upstream never signed
 		// off is a cut-off session, not an answer. Reporting it as an empty tool
 		// result would have the client retry a call that may have been made.
-		return deepSeekReportStreamAbort(nil, nil,
-			fmt.Errorf("deepseek-web stream ended before completion — the upstream session was cut off"))
+		//
+		// Nothing has been written yet on this path — it buffers the whole turn
+		// so a tool call's arguments arrive whole — so the failure travels as a
+		// status rather than as an in-band chunk, which is why the writer is nil.
+		return deepSeekFailure(http.StatusBadGateway,
+			"deepseek-web: stream ended before completion — the upstream session was cut off")
 	}
 
 	text := accumulator.contentText()
@@ -64,7 +68,7 @@ func deepSeekAccumulate(upstream io.Reader) (*deepSeekStreamAccumulator, error) 
 		accumulator.apply(event)
 	})
 	if scanErr != nil {
-		return nil, deepSeekReportStreamAbort(nil, nil, scanErr)
+		return nil, deepSeekFailure(http.StatusBadGateway, "deepseek-web: "+scanErr.Error())
 	}
 	return accumulator, nil
 }

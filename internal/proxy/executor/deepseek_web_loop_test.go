@@ -1,6 +1,10 @@
 package executor
 
 import (
+	"encoding/json/jsontext"
+	"errors"
+	"io"
+	"net/http/httptest"
 	"strings"
 
 	json "encoding/json/v2"
@@ -106,3 +110,78 @@ func TestDeepSeekUndeclaredToolIsRejected(t *testing.T) {
 		t.Error("a tool the client never declared must not be returned as a call")
 	}
 }
+
+// A tool turn the upstream cut off must answer with a status, not by writing
+// through a writer that does not exist. The buffered tool path had no writer
+// yet — it is still able to answer — and dereferencing nil there panicked and
+// took the process down, so the client saw a request that never finished.
+func TestDeepSeekToolTurnAbortsWithoutPanic(t *testing.T) {
+	var env deepSeekRequestEnvelope
+	env.Model = "deepseek-v4-pro"
+	env.Messages = []deepSeekMessage{{Role: "user", Content: jsontext.Value("weather?")}}
+
+	var spec deepSeekToolSpec
+	spec.Function.Name = "get_weather"
+	env.Tools = []deepSeekToolSpec{spec}
+
+	req := &Request{IsStream: true}
+	rec := httptest.NewRecorder()
+
+	// The upstream opens and sends fragments, then signs off with nothing: a
+	// session cut mid-turn.
+	upstream := strings.NewReader(
+		`{"v":{"response":{"fragments":[{"type":"RESPONSE","content":"Let me ch` +
+			`eck","status":1}]}}}` + "\n" +
+			`{"p":"response/fragments/-1/content","o":"APPEND","v":"eck that"}` + "\n")
+
+	err := deepSeekToolTurnToClient(rec, req, upstream, env)
+	if err == nil {
+		t.Fatal("a cut-off tool turn must return an error, not a completion")
+	}
+	if !strings.Contains(err.Error(), "cut off") {
+		t.Errorf("error = %v, want it to name the cut-off session", err)
+	}
+
+	// The failure must travel as a status, not as SSE bytes. A half-written SSE
+	// frame here would be read by a streaming client as a normal turn that simply
+	// produced nothing.
+	if body := rec.Body.String(); strings.Contains(body, "data:") {
+		t.Errorf("abort wrote SSE bytes to a client that expects a status: %q", body)
+	}
+}
+
+// deepSeekReportStreamAbort is shared by the streaming path, where 200 is
+// already on the wire and the error has to travel in-band. A nil writer there
+// means "nothing written yet" and must be a no-op, not a crash.
+func TestDeepSeekReportStreamAbortNilWriterIsNoop(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("abort with no writer panicked: %v", r)
+		}
+	}()
+
+	err := deepSeekReportStreamAbort(nil, nil, errors.New("upstream session was cut off"))
+	if err == nil {
+		t.Error("abort must still report the cause to the caller")
+	}
+}
+
+// A transport error mid-body is the other way the buffered path can fail
+// before anything has been written.
+func TestDeepSeekAccumulateReportsTransportError(t *testing.T) {
+	upstream := io.MultiReader(strings.NewReader(`{"v":{"response":{}}}`), errReader{})
+
+	accumulator, err := deepSeekAccumulate(upstream)
+	if err == nil {
+		t.Fatal("a body that fails mid-read must be an error")
+	}
+	if accumulator != nil {
+		t.Error("a failed accumulate must not hand back a partial accumulator")
+	}
+}
+
+// errReader fails every read, standing in for a connection dropped by the
+// upstream before the turn was signed off.
+type errReader struct{}
+
+func (errReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }

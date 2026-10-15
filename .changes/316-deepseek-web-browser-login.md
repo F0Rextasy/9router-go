@@ -189,3 +189,27 @@ question, not something this PR settles.
 
 `deepseek-web` is displayed as "DeepSeek Web" with no product claim, and its
 icon is the same artwork the `deepseek` provider uses.
+
+### fix(deepseek-web): a cut-off tool turn crashed the server instead of answering
+
+The buffered tool path reported an aborted upstream stream by passing a nil
+writer to `deepSeekReportStreamAbort`, which dereferenced it. Every tool turn the
+upstream cut off therefore panicked, and the process died mid-request — the
+client saw a request that never came back rather than a 502, which reads to an
+agent as a hang.
+
+The streaming path was unaffected: it passes the live writer it had been
+streaming through, and only the buffered path ever passed nil. That is why plain
+chats kept working while any request declaring `tools[]` was fatal, and why the
+failure looked intermittent.
+
+`deepSeekReportStreamAbort` now treats a nil writer as "nothing has been written
+yet" and returns the cause, and both tool-path aborts return an ordinary upstream
+failure — which is correct there, since the path buffers and can still answer
+with a status. The nil guard is kept because the shared helper is the one place
+that can be handed a nil from any caller.
+
+`deepseek_web_loop_test.go` pins all three: a cut-off tool turn returns an error
+and writes no SSE bytes, the shared abort helper survives a nil writer, and a body
+that fails mid-read does not hand back a partial accumulator. Verified against the
+pre-fix code — reintroducing it reproduces the same nil dereference.

@@ -240,7 +240,15 @@ func deepSeekStreamToClient(w http.ResponseWriter, req *Request, upstream io.Rea
 // deepSeekReportStreamAbort reports an aborted upstream stream in-band. HTTP 200
 // is already on the wire by this point, so the failure has to travel as a chunk
 // carrying an error rather than as a status the client never sees.
+//
+// A nil writer means nothing has been written yet, which is the case for the
+// tool path: it buffers, so it is still able to answer with a status. Writing
+// through a nil writer panicked and took the server down with it, turning an
+// upstream cut-off into a request that never got a response at all.
 func deepSeekReportStreamAbort(hw *proxy.HeartbeatWriter, flusher http.Flusher, cause error) error {
+	if hw == nil {
+		return cause
+	}
 	code, message := proxy.ClassifyStreamAbort(cause)
 	_, _ = hw.Write(proxy.BuildStreamErrorBytes(code, message, proxy.SSEFormatOpenAI))
 	_, _ = hw.Write([]byte("data: [DONE]\n\n"))
