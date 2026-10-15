@@ -41,9 +41,14 @@ func deepSeekToolTurnToClient(w http.ResponseWriter, req *Request, upstream io.R
 			fmt.Errorf("deepseek-web stream ended before completion — the upstream session was cut off"))
 	}
 
-	text := deepSeekToolPlainText(accumulator)
+	text := accumulator.contentText()
 	if call, ok := deepSeekExtractToolCall(text, envelope.Tools); ok {
-		return deepSeekWriteToolCall(w, req, envelope.Model, call)
+		// Anything the model wrote around the JSON object is real content and
+		// belongs to the client. Dropping it produces a message with null
+		// content, which an agent reads as an empty stop and retries — the
+		// model was answering, the wrapper threw the answer away.
+		return deepSeekWriteToolCall(w, req, envelope.Model, call,
+			deepSeekSurroundingText(text, call.Raw))
 	}
 	return deepSeekWritePlainAnswer(w, req, envelope.Model, accumulator, text)
 }
@@ -71,8 +76,9 @@ func deepSeekToolPlainText(accumulator *deepSeekStreamAccumulator) string {
 	return deepSeekStripToolScaffold(accumulator.contentText())
 }
 
-// deepSeekWriteToolCall answers with an OpenAI tool_calls message.
-func deepSeekWriteToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest) error {
+// deepSeekWriteToolCall answers with an OpenAI tool_calls message, keeping any
+// text the model wrote around the object.
+func deepSeekWriteToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
 	id := deepSeekToolCallID(call.Name)
 	message := map[string]any{
 		"role":    "assistant",
@@ -85,6 +91,9 @@ func deepSeekWriteToolCall(w http.ResponseWriter, req *Request, model string, ca
 				"arguments": call.Arguments,
 			},
 		}},
+	}
+	if preamble != "" {
+		message["content"] = preamble
 	}
 	return deepSeekWriteJSON(w, req, model, message)
 }

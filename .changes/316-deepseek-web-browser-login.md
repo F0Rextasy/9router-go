@@ -141,3 +141,40 @@ Verified live: a `deepseek-v4-pro` turn asked about the weather and returned
 **Also fixed:** `parameters` is accepted as either a JSON Schema object or a
 string, since the OpenAI shape sends an object while several SDKs stringify it
 first; typing it as a string rejected the common form outright.
+
+### fix(deepseek-web): stop the agent loop repeating a tool call forever
+
+An agent driven through this provider called `get_weather`, received the result,
+and called it again on every subsequent turn until its retry cap — reported as
+`Assistant returned empty stop after retry cap`.
+
+The cause was in the prompt, not the model. A tool-calling turn is replayed to
+the web API as text, because the endpoint accepts a single prompt string. An
+assistant turn that ends in a tool call carries `content: null`, so it was
+dropped from the replay entirely. The transcript reached the model as:
+
+```
+User: What is the weather in Jakarta? Use the tool.
+
+Tool result (get_weather) Sunny, 31C, humidity 70%
+```
+
+A result with no visible cause. The model reads that as "I have not called
+anything yet" and calls again, and the loop cannot terminate because the next
+replay is identical.
+
+The call is now rendered into the transcript as `[called <name> with <args>]`
+ahead of the result it produced, and the tool instructions state that such a line
+means the call already happened. Verified live: the two-turn sequence now ends —
+turn one calls the tool, turn two answers *"The weather in Jakarta is sunny with a
+temperature of 31°C and humidity at 70%"* with `finish_reason: stop`.
+
+**Also fixed: prose around the object.** The extractor required the answer to
+*begin* with `{`, so a model that wrote "Let me check that for you." first had
+its whole reply discarded and the client received `content: null` — an empty
+stop, which is the other half of the same symptom. The object is now located
+inside the answer with brace matching that respects strings and escapes, and the
+text around it is returned as the message content rather than dropped.
+
+An undeclared tool name is still refused: a model inventing `delete_everything`
+must never become a call the client executes.

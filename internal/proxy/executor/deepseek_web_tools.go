@@ -44,6 +44,9 @@ type deepSeekToolSpec struct {
 type deepSeekToolRequest struct {
 	Name      string
 	Arguments string
+	// Raw is the exact object text that was parsed. It lets the caller recover
+	// whatever the model wrote around the object instead of discarding it.
+	Raw string
 }
 
 // deepSeekSchemaText renders a declared schema for the prompt, accepting either
@@ -88,6 +91,12 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 	b.WriteString("To use a tool, reply with a single JSON object and nothing else: " +
 		`{"name": "<tool name>", "arguments": {<arguments matching that tool's parameters>}}. ` +
 		"Do not wrap it in prose or a code fence.")
+	b.WriteString("\n\nRules for using tools:\n")
+	b.WriteString("- A line reading \"[called <name> with <arguments>]\" means you already " +
+		"made that call and its result is the following \"Tool result\" line. Do not repeat it.\n")
+	b.WriteString("- Once you have a tool result for what was asked, answer the user in plain " +
+		"text. Calling a tool again for the same information is an error.\n")
+	b.WriteString("- Only call a tool when you actually need data you do not already have.\n")
 	return b.String()
 }
 
@@ -99,12 +108,13 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 // ordinary content. Guessing here would turn a failed parse into an invocation
 // the client then acts on.
 func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
-	trimmed := strings.TrimSpace(text)
-	// A code fence around the object is common enough to unwrap; nothing looser.
-	trimmed = strings.TrimPrefix(trimmed, "```json")
-	trimmed = strings.TrimPrefix(trimmed, "```")
-	trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "```"))
-	if !strings.HasPrefix(trimmed, "{") || !deepSeekValidJSON(trimmed) {
+	raw := strings.TrimSpace(text)
+	// The object has to be found inside the answer rather than expected at the
+	// start. A model told "reply with a single JSON object and nothing else"
+	// still prefixes it often enough to matter, and rejecting those turns is
+	// what produced content:null and an agent retry loop.
+	obj := deepSeekFindJSONObject(raw)
+	if obj == "" {
 		return deepSeekToolRequest{}, false
 	}
 
@@ -115,7 +125,7 @@ func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToo
 		// a correct call is not discarded over a key name.
 		Params jsontext.Value `json:"parameters"`
 	}
-	if err := json.Unmarshal([]byte(trimmed), &call); err != nil {
+	if err := json.Unmarshal([]byte(obj), &call); err != nil {
 		return deepSeekToolRequest{}, false
 	}
 
@@ -134,7 +144,7 @@ func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToo
 		}
 		encoded = string(arguments)
 	}
-	return deepSeekToolRequest{Name: call.Name, Arguments: encoded}, true
+	return deepSeekToolRequest{Name: call.Name, Arguments: encoded, Raw: obj}, true
 }
 
 // deepSeekToolDeclared reports whether the client asked for this tool. A model
@@ -163,4 +173,85 @@ func deepSeekValidJSON(s string) bool {
 // deepSeekToolCallID mints a call id in the shape clients expect.
 func deepSeekToolCallID(name string) string {
 	return "call_" + name + "_" + strconv.FormatInt(time.Now().UnixNano()%1_000_000, 10)
+}
+
+// deepSeekSurroundingText returns what the model wrote before and after the tool
+// call object, with the object itself removed.
+//
+// This is what stops an agent from seeing an empty stop. A model that says "Let me
+// check that for you." and then emits the object has answered twice over; the
+// wrapper used to keep only the second half, so the client received
+// `content: null` and concluded the model had said nothing.
+func deepSeekSurroundingText(answer, raw string) string {
+	if raw == "" {
+		return ""
+	}
+	idx := strings.Index(answer, raw)
+	if idx < 0 {
+		return ""
+	}
+	before := strings.TrimSpace(answer[:idx])
+	after := strings.TrimSpace(answer[idx+len(raw):])
+	after = strings.TrimSpace(strings.Trim(after, "`"))
+	after = strings.TrimSpace(strings.TrimPrefix(after, "json"))
+
+	switch {
+	case before == "":
+		return after
+	case after == "":
+		return before
+	default:
+		return before + "\n" + after
+	}
+}
+
+// deepSeekFindJSONObject returns the first balanced top-level JSON object in s.
+//
+// Balanced rather than greedy, because a fenced answer holds braces in the prose
+// ("use {x} here") and a regex would run from the first one to the last. The
+// returned slice is the object alone, so the caller can keep everything outside
+// it as the model's prose.
+func deepSeekFindJSONObject(s string) string {
+	for i := 0; i < len(s); i++ {
+		if s[i] != '{' {
+			continue
+		}
+		if end := deepSeekMatchBrace(s, i); end > i {
+			candidate := s[i : end+1]
+			if deepSeekValidJSON(candidate) {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+// deepSeekMatchBrace returns the index of the '}' closing the '{' at start, or
+// -1. Quotes and escapes are tracked so a brace inside a string does not end
+// the object early.
+func deepSeekMatchBrace(s string, start int) int {
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case escaped:
+			escaped = false
+		case c == '\\':
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case inString:
+			// Braces inside a string are literal text.
+		case c == '{':
+			depth++
+		case c == '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
 }

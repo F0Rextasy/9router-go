@@ -94,8 +94,17 @@ func deepSeekMessagesToPrompt(messages []deepSeekMessage, historyWindow int) str
 				systemParts = append(systemParts, text)
 			}
 		case "user", "assistant":
+			// An assistant turn that ended in a tool call usually carries
+			// content:null, so nothing would be recorded and the replay would
+			// show a tool result with no call that produced it. The model then
+			// cannot tell it already asked, and asks again — forever. The call
+			// itself has to be part of the transcript for the loop to close.
 			if text != "" {
 				conversation = append(conversation, deepSeekTurnLine{role: message.Role, text: text})
+			} else if message.Role == "assistant" {
+				if call := deepSeekRenderToolCalls(message.ToolCalls); call != "" {
+					conversation = append(conversation, deepSeekTurnLine{role: "assistant", text: call})
+				}
 			}
 			if message.Role == "user" {
 				lastUser = text
@@ -160,7 +169,8 @@ func deepSeekRenderTranscript(turns []deepSeekTurnLine) string {
 type deepSeekToolCall struct {
 	ID       string `json:"id"`
 	Function struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
 	} `json:"function"`
 }
 
@@ -230,4 +240,36 @@ func resolveDeepSeekModelOptions(model string, body deepSeekRequestEnvelope) dee
 		options.modelType = "expert"
 	}
 	return options
+}
+
+// deepSeekRenderToolCalls renders an assistant turn's tool_calls for the
+// transcript.
+//
+// The web API has no field for tool calls, so the only way the model can know it
+// already made a call is to read it back as text. Rendering it is what stops an
+// agent loop from repeating the same call every turn: without the line, the
+// replay shows a result with no cause and the model infers it never called.
+func deepSeekRenderToolCalls(toolCalls jsontext.Value) string {
+	if len(toolCalls) == 0 {
+		return ""
+	}
+	var calls []deepSeekToolCall
+	if err := json.Unmarshal(toolCalls, &calls); err != nil {
+		return ""
+	}
+	lines := make([]string, 0, len(calls))
+	for _, call := range calls {
+		if call.Function.Name == "" {
+			continue
+		}
+		line := "[called " + call.Function.Name
+		if call.Function.Arguments != "" {
+			line += " with " + call.Function.Arguments
+		}
+		lines = append(lines, line+"]")
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
