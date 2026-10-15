@@ -178,3 +178,18 @@ text around it is returned as the message content rather than dropped.
 
 An undeclared tool name is still refused: a model inventing `delete_everything`
 must never become a call the client executes.
+
+### Note on what is and is not verified
+
+The turn is verified end to end against the live site: a plain question returns
+`{"content":"ok"}`, a tool question returns a whole `tool_calls` message, and the
+two-turn agent sequence terminates instead of repeating the call. Streaming and
+non-streaming were both driven through a booted gateway, directly and through a
+`combo` — 109 chunks, `finish_reason: stop`, `[DONE]`.
+
+Not verified: behaviour under a client's own retry injection. A client that
+appends "Stopped without actionable output; Attempt #N/3" turns on the gateway's
+answer being absent has, in that observed run, appended the notice while the
+gateway had in fact returned the full reply with `status: success` and the
+content recorded. That is a client-side observation, not a finding against this
+provider, and it is recorded here so the next reader does not re-derive it.
