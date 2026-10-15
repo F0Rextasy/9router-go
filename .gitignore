@@ -20,6 +20,11 @@ _site/
 .9router/
 data/
 
+# Local demo gateway: its SQLite data dir, engine key and captured streams. The
+# key alone is enough to talk to the running gateway as a client, so none of it
+# belongs in a commit.
+.demo/
+
 # Local overrides
 docker-compose.local.yml
 
