@@ -167,6 +167,16 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 		"made that call and its result is the following \"Tool result\" line. Do not repeat it.\n")
 	b.WriteString("- Once you have a tool result for what was asked, answer the user in plain " +
 		"text. Calling a tool again for the same information is an error.\n")
+	// A tool result is the only evidence the model has. Without this rule it
+	// fills the gap from memory and presents the numbers as if the call had
+	// returned them — a failed command followed by a confident table is the
+	// failure mode, and the user cannot tell the data is invented.
+	b.WriteString("- A \"Tool result\" line is your only source of fact. Never state a " +
+		"figure, date, temperature, price or count that is not in one of those lines, " +
+		"and never present invented data as though a tool returned it.\n")
+	b.WriteString("- When a tool result is empty, an error, or says nothing was found, " +
+		"say so plainly. Do not substitute what you recall, and do not describe output " +
+		"that was not returned.\n")
 	b.WriteString("- Only call a tool when you actually need data you do not already have.\n")
 	b.WriteString("- If several calls are needed, put them all in one reply rather than " +
 		"answering one at a time.\n")

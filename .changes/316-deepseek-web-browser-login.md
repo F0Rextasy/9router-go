@@ -394,3 +394,22 @@ access" — while the `shell` tool it needed sat in the same prompt.
 
 `go test ./...` green. Ten live turns through `combo-wombo` with omp's own tool
 set: 10/10 returned `tool_calls`, 0 leaked markup, 0 refusals.
+
+### fix(deepseek-web): require answers to be grounded in the tool results
+
+A failed command followed by a confident table. In the stored turn
+`1792065306584` the tool result was `ls: cannot access '/tmp/jkt.json': No such
+file or directory` and the model answered with a 959-character comparison of both
+cities — temperatures, humidity, wind, UV, sunrise — presented as though wttr.in
+had returned them. Nothing in the client can separate those numbers from real
+ones.
+
+The tool prompt now states that a `Tool result` line is the only source of fact,
+that no figure may be stated which is not in one of those lines, and that an
+empty, failed or not-found result must be reported as such rather than replaced
+from memory.
+
+Verified against the polluted history itself: five live turns with the failed
+result in context, four now detect the failure and re-fetch instead of inventing
+data. One still answered from memory — a prompt rule is a strong nudge, not a
+guarantee, which is why the transcript repair above matters too.
