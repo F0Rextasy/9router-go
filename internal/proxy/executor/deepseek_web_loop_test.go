@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"io"
 	"net/http/httptest"
 	"strings"
@@ -148,6 +150,105 @@ func TestDeepSeekToolTurnAbortsWithoutPanic(t *testing.T) {
 	if body := rec.Body.String(); strings.Contains(body, "data:") {
 		t.Errorf("abort wrote SSE bytes to a client that expects a status: %q", body)
 	}
+}
+
+// A client that asked for a stream must get SSE frames. The buffered tool path
+// used to write one chat.completion document whatever was requested, so a
+// stream:true client received no `data:` frames at all and waited for a
+// terminator that never came — a request that hangs from the client's side.
+func TestDeepSeekToolTurnStreamsWhenAsked(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  string
+		tool    bool
+		wantFin string
+	}{
+		{name: "plain answer", answer: "Hi there!", wantFin: "stop"},
+		{name: "tool call", tool: true, wantFin: "tool_calls"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var spec deepSeekToolSpec
+			spec.Function.Name = "get_weather"
+
+			var env deepSeekRequestEnvelope
+			env.Model = "deepseek-v4-pro"
+			env.Messages = []deepSeekMessage{{Role: "user", Content: jsontext.Value("hi")}}
+			env.Tools = []deepSeekToolSpec{spec}
+
+			answer := tt.answer
+			if tt.tool {
+				answer = `{"name":"get_weather","arguments":{"city":"Jakarta"}}`
+			}
+
+			upstream := newSignedOffTurn(t, answer)
+			req := &Request{IsStream: true, Ctx: context.Background()}
+			rec := httptest.NewRecorder()
+
+			if err := deepSeekToolTurnToClient(rec, req, upstream, env); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			body := rec.Body.String()
+			if !strings.Contains(body, "data: ") {
+				t.Fatalf("stream:true client got no SSE frames:\n%s", body)
+			}
+			if !strings.Contains(body, "[DONE]") {
+				t.Errorf("stream is not terminated:\n%s", body)
+			}
+			if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+				t.Errorf("Content-Type = %q, want text/event-stream", got)
+			}
+			if !strings.Contains(body, `"object":"chat.completion.chunk"`) {
+				t.Errorf("streaming client got a non-chunk document:\n%s", body)
+			}
+			if !strings.Contains(body, `"finish_reason":"`+tt.wantFin+`"`) {
+				t.Errorf("finish_reason is not %q:\n%s", tt.wantFin, body)
+			}
+		})
+	}
+}
+
+// The same turn requested as non-streaming must stay a single document: the fix
+// must not change the shape for clients that did not ask for SSE.
+func TestDeepSeekToolTurnNonStreamingStaysJSON(t *testing.T) {
+	var spec deepSeekToolSpec
+	spec.Function.Name = "get_weather"
+
+	var env deepSeekRequestEnvelope
+	env.Model = "deepseek-v4-pro"
+	env.Messages = []deepSeekMessage{{Role: "user", Content: jsontext.Value("hi")}}
+	env.Tools = []deepSeekToolSpec{spec}
+
+	req := &Request{IsStream: false, Ctx: context.Background()}
+	rec := httptest.NewRecorder()
+
+	if err := deepSeekToolTurnToClient(rec, req, newSignedOffTurn(t, "Hi there!"), env); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "data: ") {
+		t.Errorf("a non-streaming request must not get SSE frames:\n%s", body)
+	}
+	if !strings.Contains(body, `"object":"chat.completion"`) {
+		t.Errorf("not a chat.completion document:\n%s", body)
+	}
+}
+
+// newSignedOffTurn builds an upstream body that carries an answer and signs it
+// off, so the tool path reads it as a complete turn. The framing is the real one:
+// SSE `data:` lines terminated by a blank line, which is what the live site sends
+// and what the scanner is written against.
+func newSignedOffTurn(t *testing.T, answer string) io.Reader {
+	t.Helper()
+	events := []string{
+		fmt.Sprintf(`{"v":{"response":{"fragments":[{"type":"RESPONSE","content":%q,"status":1}]}}}`,
+			answer),
+		`{"p":"response/status","o":"SET","v":"FINISHED"}`,
+	}
+	return strings.NewReader("data: " + strings.Join(events, "\n\ndata: ") + "\n\n")
 }
 
 // deepSeekReportStreamAbort is shared by the streaming path, where 200 is

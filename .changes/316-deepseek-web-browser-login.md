@@ -213,3 +213,23 @@ that can be handed a nil from any caller.
 and writes no SSE bytes, the shared abort helper survives a nil writer, and a body
 that fails mid-read does not hand back a partial accumulator. Verified against the
 pre-fix code — reintroducing it reproduces the same nil dereference.
+
+### fix(deepseek-web): a streaming client got one JSON document and waited forever
+
+The buffered tool path wrote a single `chat.completion` document whatever the
+client had asked for. A client that sent `stream:true` therefore received a body
+with no `data:` frames and no terminator, and waited for an end that was never
+going to arrive — which is what a request that never returns looks like from the
+other end.
+
+Tool arguments are still buffered, because a truncated JSON object is
+indistinguishable from prose and the native API does not stream them either. What
+was wrong was the framing, not the buffering: the buffered turn is now emitted as
+SSE for a streaming client, as one delta followed by a finish chunk and `[DONE]`.
+A client reassembles deltas in order, so re-fragmenting the text would only cost
+allocations. Non-streaming requests keep the single-document shape.
+
+`deepseek_web_loop_test.go` pins the contract in both directions and fails against
+the pre-fix code: a streaming tool request must produce `chat.completion.chunk`
+frames, a `text/event-stream` content type and a `[DONE]`, and a non-streaming one
+must not.

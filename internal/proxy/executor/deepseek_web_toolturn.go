@@ -51,10 +51,17 @@ func deepSeekToolTurnToClient(w http.ResponseWriter, req *Request, upstream io.R
 		// belongs to the client. Dropping it produces a message with null
 		// content, which an agent reads as an empty stop and retries — the
 		// model was answering, the wrapper threw the answer away.
-		return deepSeekWriteToolCall(w, req, envelope.Model, call,
+		if !req.IsStream {
+			return deepSeekWriteToolCall(w, req, envelope.Model, call,
+				deepSeekSurroundingText(text, call.Raw))
+		}
+		return deepSeekWriteStreamedToolCall(w, req, envelope.Model, call,
 			deepSeekSurroundingText(text, call.Raw))
 	}
-	return deepSeekWritePlainAnswer(w, req, envelope.Model, accumulator, text)
+	if !req.IsStream {
+		return deepSeekWritePlainAnswer(w, req, envelope.Model, accumulator, text)
+	}
+	return deepSeekWriteStreamedAnswer(w, req, envelope.Model, accumulator, text)
 }
 
 // deepSeekAccumulate drains the upstream body into one accumulator.
@@ -83,23 +90,7 @@ func deepSeekToolPlainText(accumulator *deepSeekStreamAccumulator) string {
 // deepSeekWriteToolCall answers with an OpenAI tool_calls message, keeping any
 // text the model wrote around the object.
 func deepSeekWriteToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
-	id := deepSeekToolCallID(call.Name)
-	message := map[string]any{
-		"role":    "assistant",
-		"content": nil,
-		"tool_calls": []any{map[string]any{
-			"id":   id,
-			"type": "function",
-			"function": map[string]any{
-				"name":      call.Name,
-				"arguments": call.Arguments,
-			},
-		}},
-	}
-	if preamble != "" {
-		message["content"] = preamble
-	}
-	return deepSeekWriteJSON(w, req, model, message)
+	return deepSeekWriteJSON(w, req, model, deepSeekToolCallMessage(call, preamble))
 }
 
 // deepSeekWritePlainAnswer answers with the model's text when no declared tool
@@ -141,6 +132,124 @@ func deepSeekWriteJSON(w http.ResponseWriter, req *Request, model string, messag
 		return fmt.Errorf("deepseek-web: write completion: %w", err)
 	}
 	return nil
+}
+
+// deepSeekWriteStreamedAnswer emits the buffered answer as SSE. The turn is
+// whole by the time this runs, so the text goes out as one delta rather than
+// being re-split: a client reassembles deltas in order regardless, so splitting
+// would only cost allocations.
+func deepSeekWriteStreamedAnswer(w http.ResponseWriter, req *Request, model string, accumulator *deepSeekStreamAccumulator, text string) error {
+	return deepSeekWriteStreamedMessage(w, req, model, map[string]any{
+		"role":    "assistant",
+		"content": text,
+	}, deepSeekReasoningDelta(accumulator))
+}
+
+// deepSeekWriteStreamedToolCall emits a tool call as SSE. The arguments go out
+// as one delta rather than per-character ones: the whole point of buffering was
+// to get them whole, and a client reassembles them from a single frame correctly.
+func deepSeekWriteStreamedToolCall(w http.ResponseWriter, req *Request, model string, call deepSeekToolRequest, preamble string) error {
+	return deepSeekWriteStreamedMessage(w, req, model, deepSeekToolCallMessage(call, preamble), nil)
+}
+
+// deepSeekWriteStreamedMessage writes one buffered message in the SSE shape a
+// streaming client expects, and closes the stream properly.
+//
+// This path existed and always wrote a single chat.completion document, whatever
+// the client asked for. A client that sent stream:true received an object with no
+// `data:` frames at all and waited forever for a terminator that was never going
+// // to arrive — which is what a hanging request is, from the client's side.
+func deepSeekWriteStreamedMessage(w http.ResponseWriter, req *Request, model string, message map[string]any, reasoning map[string]any) error {
+	hw := proxy.NewHeartbeatWriter(req.Ctx, w, 0)
+	defer hw.Close()
+	flusher := proxy.WriteSSEHeaders(hw)
+
+	responseID := deepSeekResponseID()
+	created := time.Now().Unix()
+
+	if start := req.StartTime; !start.IsZero() && req.TTFT != nil && *req.TTFT == 0 {
+		*req.TTFT = time.Since(start).Milliseconds()
+	}
+
+	emit := func(delta map[string]any, finish any) error {
+		chunk := map[string]any{
+			"id":      responseID,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []map[string]any{{"index": 0, "delta": delta, "finish_reason": finish}},
+		}
+		encoded, err := json.Marshal(chunk)
+		if err != nil {
+			return fmt.Errorf("deepseek-web: marshal chunk: %w", err)
+		}
+		if _, err := hw.Write(fmt.Appendf(nil, "data: %s\n\n", encoded)); err != nil {
+			return fmt.Errorf("deepseek-web: write chunk: %w", err)
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+
+	delta := map[string]any{}
+	for key, value := range reasoning {
+		delta[key] = value
+	}
+	if content, _ := message["content"].(string); content != "" && req.ResponseBuf != nil {
+		req.ResponseBuf.Write([]byte(content))
+	}
+	if calls, ok := message["tool_calls"]; ok {
+		delta["tool_calls"] = calls
+		delta["role"] = "assistant"
+	}
+	if content, _ := message["content"].(string); content != "" {
+		delta["content"] = content
+	}
+	if _, ok := delta["role"]; !ok {
+		delta["role"] = "assistant"
+	}
+	if err := emit(delta, nil); err != nil {
+		return err
+	}
+	if err := emit(map[string]any{}, deepSeekFinishReason(message)); err != nil {
+		return err
+	}
+	_, err := hw.Write([]byte("data: [DONE]\n\n"))
+	if flusher != nil {
+		flusher.Flush()
+	}
+	return err
+}
+
+// deepSeekToolCallMessage builds the tool_calls message, keeping any text the
+// model wrote around the object.
+func deepSeekToolCallMessage(call deepSeekToolRequest, preamble string) map[string]any {
+	message := map[string]any{
+		"role":    "assistant",
+		"content": nil,
+		"tool_calls": []any{map[string]any{
+			"id":   deepSeekToolCallID(call.Name),
+			"type": "function",
+			"function": map[string]any{
+				"name":      call.Name,
+				"arguments": call.Arguments,
+			},
+		}},
+	}
+	if preamble != "" {
+		message["content"] = preamble
+	}
+	return message
+}
+
+// deepSeekReasoningDelta returns the reasoning channel when the model used one.
+func deepSeekReasoningDelta(accumulator *deepSeekStreamAccumulator) map[string]any {
+	thinking := accumulator.thinkingText()
+	if thinking == "" {
+		return nil
+	}
+	return map[string]any{"reasoning_content": thinking}
 }
 
 // deepSeekFinishReason reports "tool_calls" only when a call is present, which
