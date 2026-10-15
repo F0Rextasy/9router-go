@@ -27,7 +27,7 @@ import (
 
 // deepSeekToolSpec is one declared tool.
 //
-// `parameters` is raw JSON because clients disagree about it: the OpenAI shape
+// `Parameters` is raw JSON because clients disagree about it: the OpenAI shape
 // sends a JSON Schema object, while several SDKs stringify it first. Typing it as
 // a string would reject the common form outright, so both are accepted and
 // normalised where the schema is rendered.
@@ -38,6 +38,56 @@ type deepSeekToolSpec struct {
 		Description string         `json:"description"`
 		Parameters  jsontext.Value `json:"parameters"`
 	} `json:"function"`
+}
+
+// UnmarshalJSON accepts both tool declaration spellings and folds them into the
+// same shape, so nothing downstream has to know which one arrived.
+//
+// OpenAI wraps the declaration: {"type":"function","function":{...}}. The
+// Claude/Anthropic spelling puts name, description and input_schema at the top
+// level with no wrapper, and clients send it just as readily.
+//
+// The flat shape used to parse into a spec whose Function.Name was empty. The
+// prompt builder skips those, so the model was told about no tools at all,
+// reached for its native DSML instead, and the markup reached the client as if
+// it were the answer — the client had no call to run and no question answered.
+func (s *deepSeekToolSpec) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name        string         `json:"name"`
+			Description string         `json:"description"`
+			Parameters  jsontext.Value `json:"parameters"`
+		} `json:"function"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		InputSchema jsontext.Value `json:"input_schema"`
+		Parameters  jsontext.Value `json:"parameters"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("deepseek-web: parse tool declaration: %w", err)
+	}
+
+	s.Type = raw.Type
+	s.Function.Name = raw.Function.Name
+	s.Function.Description = raw.Function.Description
+	s.Function.Parameters = raw.Function.Parameters
+
+	// The flat fields only fill what the wrapper left empty, so a declaration
+	// carrying both spellings resolves to the nested one.
+	if s.Function.Name == "" {
+		s.Function.Name = raw.Name
+	}
+	if s.Function.Description == "" {
+		s.Function.Description = raw.Description
+	}
+	if len(s.Function.Parameters) == 0 {
+		s.Function.Parameters = raw.InputSchema
+	}
+	if len(s.Function.Parameters) == 0 {
+		s.Function.Parameters = raw.Parameters
+	}
+	return nil
 }
 
 // deepSeekToolRequest is one call recovered from the model's answer.

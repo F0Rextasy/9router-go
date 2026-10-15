@@ -265,3 +265,26 @@ matchers key on the text between the bars rather than a fixed spelling.
 pins: verbatim parameter text including quotes, undeclared names rejected, a
 truncated block parsed as nothing, prose left alone, and the JSON path still
 working when no markers are present.
+
+### fix(deepseek-web): read Claude-shaped tool declarations
+
+A tool declaration arrives in one of two spellings. OpenAI wraps it —
+`{"type":"function","function":{...}}`. The Claude/Anthropic form puts `name`,
+`description` and `input_schema` at the top level with no wrapper, and clients
+send it just as readily.
+
+Only the first was parsed. A Claude-shaped declaration produced a spec with an
+empty name, which the prompt builder skips — so the model was told about no tools
+at all, fell back on its native DSML, and the markup reached the client as if it
+were the answer. The client had no call to run and no question answered, which is
+what a printed tool call looks like from its side.
+
+Both spellings are folded into one shape at unmarshal time, so nothing downstream
+has to know which arrived. A declaration carrying both resolves to the nested
+one, and a DSML call now matches against a flat declaration as readily as a
+wrapped one.
+
+`deepseek_web_toolshape_test.go` pins: the Claude shape reaching the rendered
+prompt, a DSML call matching it, the OpenAI shape unaffected, a mixed list, both
+spellings at once preferring the nested one, and a malformed declaration failing
+loudly rather than parsing into something empty.
