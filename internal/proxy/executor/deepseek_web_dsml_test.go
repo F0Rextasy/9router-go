@@ -303,3 +303,54 @@ func TestDeepSeekDSMLStillKeepsProseAroundTheBlock(t *testing.T) {
 		t.Fatalf("prose around the block was lost: %q", preamble)
 	}
 }
+
+// twoObjectAnswer is the shape a live model produced instead of DSML: two JSON
+// call objects in one answer, one per city. The gateway returned the first and the
+// second stayed in the content, so the user was shown a bare JSON fragment.
+const twoObjectAnswer = "Let me check both cities.\n\n" +
+	`{"name": "read", "arguments": {"path": "https://wttr.in/Jakarta?format=j1"}}` + "\n" +
+	`{"name": "read", "arguments": {"path": "https://wttr.in/Tokyo?format=j1"}}`
+
+// TestDeepSeekJSONReadsEveryObjectInOneAnswer pins the same plural rule for the
+// JSON dialect that the DSML dialect already follows.
+func TestDeepSeekJSONReadsEveryObjectInOneAnswer(t *testing.T) {
+	calls := deepSeekExtractToolCalls(twoObjectAnswer, []deepSeekToolSpec{readTool()})
+	if len(calls) != 2 {
+		t.Fatalf("extracted %d calls, want 2", len(calls))
+	}
+	for i, want := range []string{"Jakarta", "Tokyo"} {
+		if !strings.Contains(calls[i].Arguments, want) {
+			t.Errorf("call %d arguments = %s, want it to mention %s", i, calls[i].Arguments, want)
+		}
+	}
+}
+
+// TestDeepSeekJSONSecondObjectDoesNotLeak is the user-visible half: no JSON call
+// object may survive into what the assistant says.
+func TestDeepSeekJSONSecondObjectDoesNotLeak(t *testing.T) {
+	calls := deepSeekExtractToolCalls(twoObjectAnswer, []deepSeekToolSpec{readTool()})
+	raws := make([]string, 0, len(calls))
+	for _, call := range calls {
+		raws = append(raws, call.Raw)
+	}
+	preamble := deepSeekSurroundingText(twoObjectAnswer, raws...)
+
+	if strings.Contains(preamble, `"arguments"`) {
+		t.Fatalf("a call object leaked as content: %q", preamble)
+	}
+	if !strings.Contains(preamble, "Let me check both cities.") {
+		t.Fatalf("the model's prose was lost: %q", preamble)
+	}
+}
+
+// TestDeepSeekNestedObjectIsNotACall keeps a call whose arguments hold an object
+// from being reported as two calls.
+func TestDeepSeekNestedObjectIsNotACall(t *testing.T) {
+	answer := `{"name": "write", "arguments": {"path": "a.txt", "content": "{\"a\": 1}"}}`
+	var write deepSeekToolSpec
+	write.Function.Name = "write"
+	calls := deepSeekExtractToolCalls(answer, []deepSeekToolSpec{write})
+	if len(calls) != 1 {
+		t.Fatalf("extracted %d calls, want 1: a nested object is part of its parent", len(calls))
+	}
+}

@@ -291,7 +291,7 @@ func deepSeekAppendAssistant(conversation []deepSeekTurnLine, text string, toolC
 	// is not: it shows the model that answering with a bare object is accepted.
 	// Only the object goes, and only when it really is a call — an answer that
 	// merely contains a JSON fragment the extractor rejected is left alone.
-	if called, ok := deepSeekFindToolCallObject(kept); ok && called != "" {
+	for _, called := range deepSeekFindToolCallObjects(kept) {
 		kept = deepSeekRemoveObject(kept, called)
 	}
 
@@ -320,28 +320,28 @@ func deepSeekDsmlStripped(text string) string {
 	return deepSeekStripDSML(text)
 }
 
-// deepSeekFindToolCallObject returns the JSON object in the text when it really
-// is a tool call, so the transcript can drop it.
+// deepSeekFindToolCallObjects returns every JSON object in the text that really
+// is a tool call, so the transcript can drop them.
 //
 // The test is the object's shape, not the answer's: a fragment that happens to
 // be JSON but declares no tool stays where it is.
-func deepSeekFindToolCallObject(text string) (string, bool) {
-	obj := deepSeekFindJSONObject(text)
-	if obj == "" {
-		return "", false
+func deepSeekFindToolCallObjects(text string) []string {
+	var objects []string
+	for _, obj := range deepSeekFindJSONObjects(text) {
+		var call struct {
+			Name string         `json:"name"`
+			Args jsontext.Value `json:"arguments"`
+			Para jsontext.Value `json:"parameters"`
+		}
+		if err := json.Unmarshal([]byte(obj), &call); err != nil || call.Name == "" {
+			continue
+		}
+		if len(call.Args) == 0 && len(call.Para) == 0 {
+			continue
+		}
+		objects = append(objects, obj)
 	}
-	var call struct {
-		Name string         `json:"name"`
-		Args jsontext.Value `json:"arguments"`
-		Para jsontext.Value `json:"parameters"`
-	}
-	if err := json.Unmarshal([]byte(obj), &call); err != nil || call.Name == "" {
-		return "", false
-	}
-	if len(call.Args) == 0 && len(call.Para) == 0 {
-		return "", false
-	}
-	return obj, true
+	return objects
 }
 
 // deepSeekRemoveObject deletes the first occurrence of an object from the text.

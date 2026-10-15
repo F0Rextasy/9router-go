@@ -146,11 +146,30 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 		"`calls` elements — including any spelled with a DSML namespace — is discarded " +
 		"unread, and you will appear to have answered nothing.\n")
 	b.WriteString("\n\nRules for using tools:\n")
+	// Without this a model reads its own tool list as a description of what it
+	// lacks and refuses the request — "I cannot check live weather, I have no
+	// such capability" — even though the tool it needs is right there. Stating
+	// that the tools below are installed and runnable is what turns that refusal
+	// into the call the user asked for.
+	b.WriteString("- The tools above are installed and runnable. You can use them; a " +
+		"request is not outside your abilities because it needs one.\n")
+	b.WriteString("- Never answer that you lack a capability the list above provides. " +
+		"Call the tool instead.\n")
+	b.WriteString("- If a request needs information you do not have, call a tool that " +
+		"can fetch it before answering.\n")
+	// A model that cannot see the difference between itself and its tools
+	// refuses with "I have no internet access" while a command tool sits in the
+	// list able to fetch exactly that. Only the tools need the network.
+	b.WriteString("- A tool that runs commands executes on a real machine with network " +
+		"access. \"I have no internet access\" is not a reason to refuse while such " +
+		"a tool is declared — the tool has it, even when you do not.\n")
 	b.WriteString("- A line reading \"[called <name> with <arguments>]\" means you already " +
 		"made that call and its result is the following \"Tool result\" line. Do not repeat it.\n")
 	b.WriteString("- Once you have a tool result for what was asked, answer the user in plain " +
 		"text. Calling a tool again for the same information is an error.\n")
 	b.WriteString("- Only call a tool when you actually need data you do not already have.\n")
+	b.WriteString("- If several calls are needed, put them all in one reply rather than " +
+		"answering one at a time.\n")
 	return b.String()
 }
 
@@ -176,15 +195,33 @@ func deepSeekExtractToolCalls(text string, tools []deepSeekToolSpec) []deepSeekT
 		return deepSeekExtractDSML(raw, tools)
 	}
 
-	// The object has to be found inside the answer rather than expected at the
-	// start. A model told "reply with a single JSON object and nothing else"
-	// still prefixes it often enough to matter, and rejecting those turns is
-	// what produced content:null and an agent retry loop.
-	obj := deepSeekFindJSONObject(raw)
-	if obj == "" {
+	// Every call in the answer, not just the first. A model told two cities are
+	// involved writes two objects, and returning one leaves the other sitting in
+	// the answer as text the user reads as a leaked fragment.
+	calls := deepSeekJSONToolCalls(raw, tools)
+	if len(calls) == 0 {
 		return nil
 	}
+	return calls
+}
 
+// deepSeekJSONToolCalls reads every JSON object in the answer as a tool call.
+func deepSeekJSONToolCalls(answer string, tools []deepSeekToolSpec) []deepSeekToolRequest {
+	objects := deepSeekFindJSONObjects(answer)
+	calls := make([]deepSeekToolRequest, 0, len(objects))
+	for _, obj := range objects {
+		if call, ok := deepSeekParseJSONCall(obj, tools); ok {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+	return calls
+}
+
+// deepSeekParseJSONCall reads one JSON object as a tool call.
+func deepSeekParseJSONCall(obj string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
 	var call struct {
 		Name      string         `json:"name"`
 		Arguments jsontext.Value `json:"arguments"`
@@ -193,7 +230,7 @@ func deepSeekExtractToolCalls(text string, tools []deepSeekToolSpec) []deepSeekT
 		Params jsontext.Value `json:"parameters"`
 	}
 	if err := json.Unmarshal([]byte(obj), &call); err != nil {
-		return nil
+		return deepSeekToolRequest{}, false
 	}
 
 	arguments := call.Arguments
@@ -201,17 +238,17 @@ func deepSeekExtractToolCalls(text string, tools []deepSeekToolSpec) []deepSeekT
 		arguments = call.Params
 	}
 	if call.Name == "" || !deepSeekToolDeclared(call.Name, tools) {
-		return nil
+		return deepSeekToolRequest{}, false
 	}
 
 	encoded := "{}"
 	if len(arguments) > 0 {
 		if !deepSeekValidJSON(string(arguments)) {
-			return nil
+			return deepSeekToolRequest{}, false
 		}
 		encoded = string(arguments)
 	}
-	return []deepSeekToolRequest{{Name: call.Name, Arguments: encoded, Raw: obj}}
+	return deepSeekToolRequest{Name: call.Name, Arguments: encoded, Raw: obj}, true
 }
 
 // deepSeekToolDeclared reports whether the client asked for this tool. A model
@@ -280,25 +317,36 @@ func deepSeekSurroundingText(answer string, raws ...string) string {
 	return strings.TrimSpace(strings.TrimPrefix(surrounding, "json"))
 }
 
-// deepSeekFindJSONObject returns the first balanced top-level JSON object in s.
+// deepSeekFindJSONObjects returns every balanced top-level JSON object in s.
 //
 // Balanced rather than greedy, because a fenced answer holds braces in the prose
-// ("use {x} here") and a regex would run from the first one to the last. The
-// returned slice is the object alone, so the caller can keep everything outside
-// it as the model's prose.
-func deepSeekFindJSONObject(s string) string {
+// ("use {x} here") and a regex would run from the first one to the last. Each
+// returned slice is one object alone, so the caller can keep everything outside
+// them as the model's prose.
+//
+// All of them, because a model that was asked about two things writes two
+// objects: returning one left the other in the answer as a fragment the user
+// reads as a leak.
+func deepSeekFindJSONObjects(s string) []string {
+	var objects []string
 	for i := 0; i < len(s); i++ {
 		if s[i] != '{' {
 			continue
 		}
-		if end := deepSeekMatchBrace(s, i); end > i {
-			candidate := s[i : end+1]
-			if deepSeekValidJSON(candidate) {
-				return candidate
-			}
+		end := deepSeekMatchBrace(s, i)
+		if end <= i {
+			continue
 		}
+		candidate := s[i : end+1]
+		if !deepSeekValidJSON(candidate) {
+			continue
+		}
+		objects = append(objects, candidate)
+		// Skip past the object rather than descending into it: braces between
+		// these two indices are its own, and a nested object is not a call.
+		i = end
 	}
-	return ""
+	return objects
 }
 
 // deepSeekMatchBrace returns the index of the '}' closing the '{' at start, or

@@ -373,3 +373,24 @@ puts them in one frame so the client runs them together.
 
 `go test ./...` green; 6 live turns through `combo-wombo` returned zero leaked
 markup, and the exact polluted history the user reported now answers in prose.
+
+### fix(deepseek-web): read every call in an answer, in both dialects
+
+The plural rule was applied to DSML only. On the JSON path a model asked about two
+cities writes two call objects, and the gateway returned the first while the second
+stayed in the answer as text — so the assistant's content carried a bare
+`{"name": "shell", "arguments": …}` fragment that the user read as a leak. Both
+paths now return every call they find, de-duplicated by name and arguments.
+
+`deepSeekFindJSONObjects` replaces the single-object finder: it returns each
+balanced top-level object and skips past it, so a nested object inside a call's
+arguments is part of its parent rather than a call of its own.
+
+The tool prompt also states that the declared tools are installed and runnable and
+that a command tool executes on a machine with network access. Without that, a
+model read its own tool list as a description of what it lacked and refused with
+"I cannot check live weather, I have no such capability" — or "I have no internet
+access" — while the `shell` tool it needed sat in the same prompt.
+
+`go test ./...` green. Ten live turns through `combo-wombo` with omp's own tool
+set: 10/10 returned `tool_calls`, 0 leaked markup, 0 refusals.
