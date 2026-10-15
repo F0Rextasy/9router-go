@@ -45,6 +45,11 @@ fi
 # -s so the token is read without ever entering a command line, and the file is
 # read into a variable the caller has already promised not to print.
 token="$(cat "$TOKEN_FILE")"
+
+# A pasted credential is itself JSON ({"value":"t.…","__version":"0"}), so it
+# cannot be interpolated into a JSON body directly: its inner quotes close the
+# apiKey string early and the server answers "invalid JSON". Encode it properly.
+token_json="$(python -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$token")"
 if [[ ${#token} -lt 20 ]]; then
   echo "$TOKEN_FILE looks too short to be a userToken" >&2
   exit 1
@@ -118,7 +123,7 @@ if [[ -z "$BASE_URL" ]]; then
   # the diagnostic — curl -f would discard it and print a bare "exit 22".
   probe="$(curl -sS -X POST "http://127.0.0.1:$PORT/api/providers/validate" \
     -H "x-9r-cli-token: $cli_token" -H 'Content-Type: application/json' \
-    -d "{\"provider\":\"$PROVIDER\",\"apiKey\":\"$token\"}")"
+    -d "{\"provider\":\"$PROVIDER\",\"apiKey\":$token_json}")"
   echo "$probe"
   case "$probe" in
     *'"valid":true'*) ;;
@@ -135,7 +140,7 @@ echo "== registering the connection"
 [[ -z "$BASE_URL" ]] || echo "   (baseUrl override: $BASE_URL)"
 conn="$(curl -fsS -X POST "http://127.0.0.1:$PORT/api/connections" \
   -H "x-9r-cli-token: $cli_token" -H 'Content-Type: application/json' \
-  -d "{\"name\":\"DeepSeek Web\",\"provider\":\"$PROVIDER\",\"priority\":0,\"isActive\":true,\"data\":{\"apiKey\":\"$token\"$base_url_field}}" \
+  -d "{\"name\":\"DeepSeek Web\",\"provider\":\"$PROVIDER\",\"priority\":0,\"isActive\":true,\"data\":{\"apiKey\":$token_json$base_url_field}}" \
   | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
 echo "connection $conn registered"
 
