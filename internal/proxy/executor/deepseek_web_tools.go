@@ -164,7 +164,7 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 // acts on.
 func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
 	raw := strings.TrimSpace(text)
-	if strings.Contains(raw, "DSML｜｜") {
+	if deepSeekHasDSML(raw) {
 		return deepSeekExtractDSML(raw, tools)
 	}
 

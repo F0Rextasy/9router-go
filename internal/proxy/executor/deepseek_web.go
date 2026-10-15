@@ -32,7 +32,6 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 	if err := json.Unmarshal(req.Body, &envelope); err != nil {
 		return fmt.Errorf("deepseek-web: parse request: %w", err)
 	}
-
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()

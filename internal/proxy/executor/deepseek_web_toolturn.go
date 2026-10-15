@@ -61,7 +61,7 @@ func deepSeekToolTurnToClient(w http.ResponseWriter, req *Request, upstream io.R
 	// A DSML block that named a tool the client never declared, or that named one
 	// at all, is markup rather than an answer. Leaving it in shows the user a wall
 	// of `parameter>` tags for something that was meant to be a tool call.
-	if strings.Contains(text, "DSML｜｜") {
+	if deepSeekHasDSML(text) {
 		if stripped := deepSeekStripDSML(text); stripped != "" {
 			text = stripped
 		}

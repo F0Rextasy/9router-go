@@ -288,3 +288,33 @@ wrapped one.
 prompt, a DSML call matching it, the OpenAI shape unaffected, a mixed list, both
 spellings at once preferring the nested one, and a malformed declaration failing
 loudly rather than parsing into something empty.
+
+### fix(deepseek-web): match the closing tags the model actually writes
+
+The first version of the DSML parser matched closing tags against the opener
+spelled without a slash — `<｜｜DSML｜｜ invoke>` — which is how the notation reads
+when it is described in prose. A live answer closes them as XML does:
+
+```
+<｜｜DSML｜｜ calls>
+<｜｜DSML｜｜ invoke name="read">
+<｜｜DSML｜｜ parameter name="path" string="true">https://wttr.in/Jakarta</｜｜DSML｜｜ parameter>
+</｜｜DSML｜｜ invoke>
+</｜｜DSML｜｜ calls>
+```
+
+`strings.Index` therefore returned -1 on every block, nothing was parsed, and each
+DSML call went to the client as literal markup — the failure the DSML support was
+written to prevent. The test fixture had been hand-written from the same wrong
+reading, so it agreed with the parser and passed.
+
+Tags are now matched by pattern: the bar may be full-width or ASCII, the marker
+may be padded, and a closing tag may or may not carry its slash. Opening tags
+cannot match a terminator because theirs is followed by `/`, and the stripper
+searches for the terminator from after the opening element so it cannot truncate a
+block at its own first tag.
+
+`deepseek_web_dsml_test.go` now drives a block copied byte for byte out of a live
+answer rather than reconstructed, and additionally pins both close spellings, the
+ASCII pipe, and that both invokes in the live block are recovered in order. The
+suite fails against the previous parser.
