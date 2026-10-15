@@ -90,3 +90,54 @@ page showed an active outage (incident 7116348214287, "Identified") throughout,
 so the stream translator's handling of a healthy response remains unproven
 against the live site. `bun run build`, 344 web tests and `make vet-svelte`
 (0 unresolved identifiers) pass.
+
+### fix(deepseek-web): read the answer the site actually sends, and recover tool calls
+
+Two defects found by running a real turn against chat.deepseek.com, both of
+which the `httptest` fixtures had been shaped to agree with.
+
+**The answer arrived without a topic.** The stream carries three shapes, and only
+one names one:
+
+```
+{"v":{"response":{...fragments...}}}                          the answer, topicless
+{"p":"response/fragments/-1/content","o":"APPEND","v":"x"}   one character at a time
+{"p":"response/status","o":"SET","v":"FINISHED"}               the sign-off
+```
+
+The decoder dispatched on `p`, so the answer fell through to a default branch
+that handled a bare string and dropped an object — losing the whole reply while
+still finding `FINISHED`. The turn therefore reported success with no text, which
+is why a live run answered `502 upstream answered 200 without a completion`. A
+topicless object carrying `response` is now read before the topic switch, and the
+per-character `APPEND` form is folded into the channel already open. A plain
+question went from 2 chunks to 55 and now returns `{"content":"ok"}` live.
+
+**Tool calling is a convention here, not a protocol.** The endpoint has no
+`tools[]` parameter and the stream has no tool-call topic: a model told a tool
+exists answers by *typing* a JSON object one character at a time, in 47 separate
+`APPEND` operations. A client treating that as a normal streaming answer would
+hold `{"name":"get_weather","arguments":{"` with no way to tell a truncated call
+from prose.
+
+So the two paths are kept apart. A request carrying `tools[]` buffers the turn to
+completion and parses only whole JSON — the same guarantee the native API gives,
+since it does not stream tool arguments either. A request without `tools[]`
+reaches none of that code and streams exactly as before. The declarations are
+folded into the prompt, because there is no field to send them in.
+
+Recovery is deliberately conservative: the answer must be a single JSON object
+naming a tool the client actually declared. An undeclared name, prose around the
+object, or malformed JSON is passed through as ordinary content rather than
+guessed at — a wrong guess becomes an invocation the client acts on.
+
+Verified live: a `deepseek-v4-pro` turn asked about the weather and returned
+
+```json
+"finish_reason":"tool_calls",
+"function":{"name":"get_weather","arguments":"{\"city\": \"Jakarta\"}"}
+```
+
+**Also fixed:** `parameters` is accepted as either a JSON Schema object or a
+string, since the OpenAI shape sends an object while several SDKs stringify it
+first; typing it as a string rejected the common form outright.

@@ -53,6 +53,14 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 		return deepSeekFailure(http.StatusBadRequest, "deepseek-web received a request with no text content")
 	}
 
+	// The tool declarations are folded into the prompt rather than sent as a
+	// parameter: /api/v0/chat/completion has no field for them. Only a request
+	// that actually declared tools reaches this, so an ordinary turn's prompt is
+	// byte-for-byte what it was before.
+	if len(envelope.Tools) > 0 {
+		prompt = deepSeekRenderTools(envelope.Tools) + "\n\n" + prompt
+	}
+
 	turn := newDeepSeekTurn(req.Client, deepSeekBaseURL(req.Config))
 
 	accessToken, err := turn.acquireAccessToken(ctx, userToken)
@@ -82,6 +90,14 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 	// drained. A leftover session is invisible to the user, which is why the
 	// failure there is logged inside the helper rather than returned.
 	defer turn.deleteSession(ctx, accessToken, sessionID)
+
+	// Tool calling is a separate path, taken only when the client declared
+	// tools. Everything above is identical either way: same token exchange, same
+	// session, same completion. The branch exists below the shared preamble so
+	// that a request without tools cannot be affected by any of it.
+	if len(envelope.Tools) > 0 {
+		return deepSeekToolTurnToClient(w, req, response.Body, envelope)
+	}
 
 	forwardUpstreamResponseHeaders(w, response.Header)
 

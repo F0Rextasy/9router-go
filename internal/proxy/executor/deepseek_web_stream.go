@@ -95,7 +95,25 @@ func deepSeekIsThinkingModel(model string) bool {
 }
 
 // apply folds one upstream event into the accumulated state.
+//
+// The live stream carries three shapes the topic switch has to cover, and only
+// one of them names a topic:
+//
+//	{"v":{"response":{...fragments...}}}                 the answer, topicless
+//	{"p":"response/fragments/-1/content","o":"APPEND","v":"x"}  one character
+//	{"p":"response","o":"BATCH","v":[{"p":"quasi_status","v":"FINISHED"}]}
+//
+// The topicless form is the common one: dispatching on `p` alone sends it to
+// the default branch, where a bare string is appended but an object is dropped
+// — which loses the whole answer while still finding the FINISHED marker, so a
+// turn reports success with no text. The object form is therefore checked
+// before the topic switch.
 func (a *deepSeekStreamAccumulator) apply(event deepSeekStreamEvent) {
+	if event.P == "" {
+		a.applyTopicless(event.V)
+		return
+	}
+
 	switch event.P {
 	case "response/status":
 		if s, ok := decodeJSONString(event.V); ok && s == "FINISHED" {
@@ -115,10 +133,34 @@ func (a *deepSeekStreamAccumulator) apply(event deepSeekStreamEvent) {
 		return
 	}
 
+	// A per-character append into a fragment slot. The index is negative
+	// upstream, naming a slot that does not exist yet, so the append is treated
+	// as continuation of the channel already open rather than as a new one.
+	if event.O == "APPEND" && strings.HasPrefix(event.P, "response/fragments/") && strings.HasSuffix(event.P, "/content") {
+		if s, ok := decodeJSONString(event.V); ok {
+			a.append(s)
+		}
+		return
+	}
+
 	// Any other topic carrying a bare string is visible text on whichever
 	// channel is already open.
 	if s, ok := decodeJSONString(event.V); ok {
 		a.append(s)
+	}
+}
+
+// applyTopicless handles the shape the answer arrives in: a bare string is text,
+// and an object carrying a `response` key is a payload the topic switch never
+// sees.
+func (a *deepSeekStreamAccumulator) applyTopicless(value jsontext.Value) {
+	if s, ok := decodeJSONString(value); ok {
+		a.append(s)
+		return
+	}
+	var payload deepSeekResponsePayload
+	if err := json.Unmarshal(value, &payload); err == nil {
+		a.applyResponsePayload(payload)
 	}
 }
 

@@ -186,14 +186,18 @@ func deepSeekCollectToolNames(toolCalls jsontext.Value, into map[string]string) 
 // what is sent upstream. Everything else is dropped, because this upstream
 // accepts only the fields in deepSeekCompletionRequest.
 type deepSeekRequestEnvelope struct {
-	Model           string            `json:"model"`
-	Messages        []deepSeekMessage `json:"messages"`
-	ThinkingEnabled bool              `json:"thinking_enabled"`
-	Thinking        bool              `json:"thinking"`
-	ReasoningEffort string            `json:"reasoning_effort"`
-	SearchEnabled   bool              `json:"search_enabled"`
-	Search          bool              `json:"search"`
-	WebSearch       bool              `json:"web_search"`
+	Model    string            `json:"model"`
+	Messages []deepSeekMessage `json:"messages"`
+	// Tools are carried only so the executor can tell a tool-calling request
+	// from an ordinary one; they never reach the upstream as a parameter,
+	// because this endpoint has no field for them.
+	Tools           []deepSeekToolSpec `json:"tools"`
+	ThinkingEnabled bool               `json:"thinking_enabled"`
+	Thinking        bool               `json:"thinking"`
+	ReasoningEffort string             `json:"reasoning_effort"`
+	SearchEnabled   bool               `json:"search_enabled"`
+	Search          bool               `json:"search"`
+	WebSearch       bool               `json:"web_search"`
 }
 
 // deepSeekModelOptions is how a requested model maps onto this upstream's two
