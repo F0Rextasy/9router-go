@@ -102,13 +102,22 @@ func deepSeekRenderTools(tools []deepSeekToolSpec) string {
 
 // deepSeekExtractToolCall recovers a tool call from the model's answer.
 //
-// It is deliberately conservative. The answer must be a single JSON object that
-// names one of the tools the client declared. Anything else — prose around it, an
-// undeclared name, malformed JSON — returns false and reaches the client as
-// ordinary content. Guessing here would turn a failed parse into an invocation
-// the client then acts on.
+// The prompt asks for JSON and the model usually complies, but these models also
+// have a native tool syntax they reach for on their own. Both are read here, and
+// DSML is tried first: it is unambiguous, where a JSON-shaped object sitting in
+// prose has to be guessed at.
+//
+// It is deliberately conservative. The answer must name one of the tools the
+// client declared, in either dialect. Anything else — prose, an undeclared name,
+// malformed JSON — returns false and reaches the client as ordinary content.
+// Guessing here would turn a failed parse into an invocation the client then
+// acts on.
 func deepSeekExtractToolCall(text string, tools []deepSeekToolSpec) (deepSeekToolRequest, bool) {
 	raw := strings.TrimSpace(text)
+	if strings.Contains(raw, "DSML｜｜") {
+		return deepSeekExtractDSML(raw, tools)
+	}
+
 	// The object has to be found inside the answer rather than expected at the
 	// start. A model told "reply with a single JSON object and nothing else"
 	// still prefixes it often enough to matter, and rejecting those turns is

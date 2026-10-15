@@ -233,3 +233,35 @@ allocations. Non-streaming requests keep the single-document shape.
 the pre-fix code: a streaming tool request must produce `chat.completion.chunk`
 frames, a `text/event-stream` content type and a `[DONE]`, and a non-streaming one
 must not.
+
+### fix(deepseek-web): read the DSML tool calls the site models actually emit
+
+Asked for a tool call, the models answer in DSML — the site's own element
+syntax — rather than the JSON object the prompt asks for:
+
+```
+<｜｜DSML｜｜ invoke name="web_search">
+<｜｜DSML｜｜ parameter name="query" string="true">cuaca Jakarta hari ini<｜｜DSML｜｜ parameter>
+<｜｜DSML｜｜ invoke>
+```
+
+The extractor only looked for JSON, so the whole block reached the client as
+literal content. The client had no call to run, saw markup ending in
+`parameter>`, and read the turn as a refusal — which is what produced a tool call
+printed instead of performed.
+
+Both dialects are now read, DSML first because it is unambiguous where a
+JSON-shaped object sitting in prose has to be guessed at. Each invoke becomes an
+ordinary call; parameter bodies become JSON string values, and `string="day"`-style
+attributes stay attributes, so they never land where the tool expects a value. An
+invoke naming a tool the client never declared is still rejected and still
+reaches the client as content — but stripped of the markup, since a wall of
+`parameter>` tags is not something to show a user.
+
+The markers use a fullwidth bar (U+FF5C) and are written with padding, so the
+matchers key on the text between the bars rather than a fixed spelling.
+
+`deepseek_web_dsml_test.go` drives the exact block a live answer produced, and
+pins: verbatim parameter text including quotes, undeclared names rejected, a
+truncated block parsed as nothing, prose left alone, and the JSON path still
+working when no markers are present.
