@@ -1,0 +1,65 @@
+### feat(deepseek-web): stealth mode — behave like the real web client, not like a bot
+
+A browser-login account was getting muted by the upstream for days at a time.
+The cause is not one thing: `chat.deepseek.com` is a consumer account, not an API
+plan, and everything about a request says whether a browser made it. Four of
+those signals were wrong or missing. All four are now parity with the site's own
+client, and the mode is on by default (`providerSpecificData.stealth = false`
+opts out per connection).
+
+**The fingerprint was stale and incomplete.** It advertised client `2.0.0` while
+the live build sends `2.3.0`, and it sent neither the client-attestation headers
+(`x-hif-leim` / `x-hif-dliq`) nor the `Sec-Fetch-*`, `Priority` and client-hint
+headers a browser always sends. The attestation values are not a signature to
+reverse engineer: the browser fetches them from `hif-leim.deepseek.com` /
+`hif-dliq.deepseek.com` and caches them for the TTL the answer announces in
+`x-hif-ttl` (600s), so they are now fetched and cached the same way, with a
+failed fetch degrading to the cached value and then to no header rather than
+failing the turn. The dashboard probe now sends the executor's own header set
+instead of a copy of it, so "valid" from the dashboard means the real turn will
+be judged the same way.
+
+**Every turn re-sent the whole transcript in a fresh session.** That is the
+behaviour a sibling implementation (`snake-aabb-wtf/deepseek-web2api-free`) names
+as the main cause of account mutes: with a new session per request and the full
+history as the prompt, every message in the upstream session embeds every
+previous turn, which grows quadratically and no browser produces it. A
+conversation is now pinned to one upstream session and each turn sends only the
+part the previous turn did not — threaded on the `parent_message_id` the upstream
+itself named. Three conditions must hold (a client conversation id, no other turn
+holding the session, a prompt that extends what was sent) and every failure falls
+back to the plain behaviour rather than guessing. A turn that did not pin cannot
+overwrite the chain a concurrent turn is still building.
+
+**A burst had no ceiling.** An agent client dispatches parallel sub-agents, and
+those all arrived on one account at once. A per-account gate now caps in-flight
+turns (default 2) and queues the rest, and each turn waits a random part of a
+400ms window before its first upstream call so a fan-out does not leave in
+lockstep.
+
+**A muted account was read as a cut-off session.** The enforcement arrives as
+HTTP 200 with the refusal in the body — `{"data":{"biz_code":5,"biz_msg":"user is
+muted","biz_data":{"mute_until":…}}}` — and an in-stream refusal arrives as an
+`event: hint` / `event: toast` error frame with no fragments at all. Both were
+reported as 502, so the router retried the same punished account, which is how a
+brief mute becomes a long one. Both now reach the router as **429** carrying the
+wait the upstream announced in `Retry-After`, so the account is cooled down and
+the next connection serves the turn. A version refusal ("update to the latest
+version") is the gateway's own problem and stays a 502 — it must not cool an
+account down. A streaming client also gets the refusal in-band, since the status
+is already on the wire.
+
+**Also fixed:** `parent_message_id` was typed as a string; the site threads on an
+integer. A pinned conversation is rendered as a role-tagged transcript, because
+turn one used to send bare user text while turn two sent a transcript — so no
+turn could ever be expressed as an extension of the previous one.
+
+**Verification:** `go test ./...`, `go vet ./...`, `make test-integration` and
+`bun run build` all clean. New unit coverage drives real turns against one fake
+upstream: session reuse with only the tail sent, divergence starting a fresh
+session, the concurrent-turn pin rules, the gate (cap, per-account scope,
+double-release, cancelled wait), attestation caching and degradation, mute and
+in-stream refusal mapping, stealth off restoring the plain path and its header
+set, and the stealth option defaults. Live, against the real attestation hosts:
+both answer `{"data":{"biz_data":{"value":"…"}}}` with `x-hif-ttl: 600`, and
+`create_pow_challenge` accepts the request with header version 2.3.0.
