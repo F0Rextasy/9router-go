@@ -60,6 +60,23 @@ upstream: session reuse with only the tail sent, divergence starting a fresh
 session, the concurrent-turn pin rules, the gate (cap, per-account scope,
 double-release, cancelled wait), attestation caching and degradation, mute and
 in-stream refusal mapping, stealth off restoring the plain path and its header
-set, and the stealth option defaults. Live, against the real attestation hosts:
-both answer `{"data":{"biz_data":{"value":"…"}}}` with `x-hif-ttl: 600`, and
-`create_pow_challenge` accepts the request with header version 2.3.0.
+set, and the stealth option defaults. Live, against the real attestation host:
+`hif-leim.deepseek.com/query` answers `{"data":{"biz_data":{"value":"…"}}}` with
+`x-hif-ttl: 600`, and `create_pow_challenge` accepts the request with header
+version 2.3.0. `hif-dliq.deepseek.com` is published IPv6-only and had no route
+from the probe host, so `X-Hif-Dliq` was exercised by unit test only — the
+designed degradation (header omitted, turn still proceeds) is what the live run
+did.
+
+**Known limit — the TLS stack is still Go's.** Measured against a local capture,
+Go's ClientHello is the textbook `c4ccfa85…` JA3 (13 ciphers, 10 extensions, no
+ALPN, no GREASE) and its request headers go out alphabetically, where a Chrome
+build negotiates 16 ciphers / 17 extensions with GREASE and `ALPN h2,http/1.1`
+and sends headers in its own order. That is the one browser signal this change
+does not match. No probed endpoint rejected the Go build for it —
+`create_pow_challenge` answered `200` to both stacks with byte-identical bodies,
+and the site's HTML shell answers `202 x-amzn-waf-action: challenge` to both — so
+it is recorded as an open gap, not as a fix that failed. Adopting a Chrome-profile
+TLS stack for this provider is a follow-up on its own: it needs the connection's
+proxy handed across to the new transport, and it should not be argued for in the
+same PR as a measured ban cause.
