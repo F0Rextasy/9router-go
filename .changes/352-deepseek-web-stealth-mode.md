@@ -80,3 +80,29 @@ it is recorded as an open gap, not as a fix that failed. Adopting a Chrome-profi
 TLS stack for this provider is a follow-up on its own: it needs the connection's
 proxy handed across to the new transport, and it should not be argued for in the
 same PR as a measured ban cause.
+
+### fix(dashboard): a browser-login provider's tile counted none of its connections
+
+The DeepSeek Web tile read "No connections" beside a live connection, and the
+counter at the bottom of the sidebar agreed — while the provider's own detail
+page listed the connection.
+
+The API Key Providers section renders the browser-login providers too, but it
+scored every card against a fixed `['apikey','api_key']` list. A browser-login
+credential is stored as `authType: 'cookie'` — the add modal derives that from
+the catalog's `webCookie` category — so the tile matched nothing. The detail
+page filters by provider alone, which is why the two views disagreed.
+
+`providerAuthTypes` now widens a section's list with the types the catalog
+declares (`authType`, `authModes`) instead of a caller passing one fixed list
+per section. It only adds, so no provider that used to be counted stops being
+counted; the `apikey` / `api_key` spellings travel together because the registry
+uses both for one credential. The same call site is shared by the OAuth section,
+where a dual-auth provider (`clinepass`, `qoder`, `xai`) declares `apikey` in
+`authModes` and its oauth connection was the only one counted.
+
+Verified in Chromium against a real gateway: the tile prints `1 Connected`, and
+the new `web/e2e/webCookieProviderTile.test.ts` fails with the exact reported
+string (`DeepSeek Web No connections`) when the section list is passed again.
+All 22 `(provider, authType)` pairs present in an operator database were
+replayed through the helper — every one is counted.
