@@ -1369,3 +1369,25 @@ func TestGeminiWebArgonCarriesItsThinkingLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestGeminiWebMessagesToPrompt verifies single-turn requests collapse to just
+// the user prompt without transcript labels, while multi-turn requests render
+// role tags.
+func TestGeminiWebMessagesToPrompt(t *testing.T) {
+	singleTurn := []deepSeekMessage{
+		{Role: "user", Content: quoted(t, "hello gemini")},
+	}
+	if got := geminiWebMessagesToPrompt(singleTurn); got != "hello gemini" {
+		t.Fatalf("single turn got %q, want %q", got, "hello gemini")
+	}
+
+	multiTurn := []deepSeekMessage{
+		{Role: "user", Content: quoted(t, "first question")},
+		{Role: "assistant", Content: quoted(t, "first answer")},
+		{Role: "user", Content: quoted(t, "second question")},
+	}
+	expectedMulti := "User: first question\n\nAssistant: first answer\n\nUser: second question"
+	if got := geminiWebMessagesToPrompt(multiTurn); got != expectedMulti {
+		t.Fatalf("multi turn got %q, want %q", got, expectedMulti)
+	}
+}
