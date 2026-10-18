@@ -14,5 +14,9 @@ Passed `false` as `gemini-web` turns are self-contained, preserving single-turn
 collapsing behavior. Added `TestGeminiWebMessagesToPrompt` to verify prompt
 generation formatting.
 
+Also upgraded `github.com/cloudflare/circl` to `v1.6.3` (dependency of
+`bogdanfinn/tls-client`), clearing vulnerability `GO-2026-4550` detected by
+`govulncheck`.
+
 **Verified.** `go build ./...`, `go vet ./...`, `go test ./...` all pass clean;
-`TestGeminiWebMessagesToPrompt` passes.
+`govulncheck ./...` reports 0 vulnerabilities; `TestGeminiWebMessagesToPrompt` passes.
