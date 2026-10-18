@@ -1542,7 +1542,7 @@ const antigravityDashboardUA = providers.AntigravityCLIUserAgent
 
 var antigravityImportantModels = map[string]bool{
 	"gemini-4-argon-high": true, "gemini-4-argon-medium": true, "gemini-4-argon-low": true,
-	"gemini-4-argon": true,
+	"gemini-4-argon":        true,
 	"gemini-3.8-flash-high": true, "gemini-3.8-flash-medium": true, "gemini-3.8-flash-low": true,
 	"gemini-3.7-flash-high": true, "gemini-3.7-flash-medium": true, "gemini-3.7-flash-low": true,
 	"gemini-3.6-flash-high": true, "gemini-3.6-flash-medium": true, "gemini-3.6-flash-low": true,

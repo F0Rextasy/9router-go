@@ -764,14 +764,14 @@ func isOpencodeFreeModel(cleanModel string) bool {
 
 var opencodeGoMessagesModels = map[string]bool{
 	"claude-haiku-5-5": true,
-	"minimax-m3":    true,
-	"minimax-m2.7":  true,
-	"minimax-m2.5":  true,
-	"qwen3.8-max":   true,
-	"qwen3.8-flash": true,
-	"qwen3.7-max":   true,
-	"qwen3.7-plus":  true,
-	"qwen3.6-plus":  true,
+	"minimax-m3":       true,
+	"minimax-m2.7":     true,
+	"minimax-m2.5":     true,
+	"qwen3.8-max":      true,
+	"qwen3.8-flash":    true,
+	"qwen3.7-max":      true,
+	"qwen3.7-plus":     true,
+	"qwen3.6-plus":     true,
 }
 
 // EnsureClaudeMessages exposes the OpenAI→Claude Messages request conversion
@@ -1511,10 +1511,7 @@ func forwardOpencodeGoGemini(w http.ResponseWriter, req *Request, cleanModel, se
 
 	geminiURL := fmt.Sprintf("https://opencode.ai/inference/go/v1/models/%s:%s", cleanModel, action)
 	if req.Config != nil && req.Config.BaseURL != "" && !strings.Contains(req.Config.BaseURL, "opencode.ai") {
-		base := strings.TrimRight(req.Config.BaseURL, "/")
-		if strings.HasSuffix(base, "/chat/completions") {
-			base = strings.TrimSuffix(base, "/chat/completions")
-		}
+		base := strings.TrimSuffix(strings.TrimRight(req.Config.BaseURL, "/"), "/chat/completions")
 		geminiURL = fmt.Sprintf("%s/%s:%s", base, cleanModel, action)
 	}
 
@@ -1541,7 +1538,7 @@ func forwardOpencodeGoGemini(w http.ResponseWriter, req *Request, cleanModel, se
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (gemini route): %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, constants.UpstreamErrLimit))
