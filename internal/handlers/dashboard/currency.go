@@ -220,16 +220,35 @@ func mergeRefreshedRates(repo *db.Repo, fetched map[string]any, codes []string) 
 	if err != nil {
 		return nil, nil
 	}
-	storedRates, _ := stored["rates"].(map[string]any)
+	// Stored rates win priority in the cap: a table already at maxCurrencyRates
+	// keeps every stored code rather than letting a fetched overflow evict the
+	// alphabetically-last one (VND, a manual rate). Fetched rates still
+	// overwrite codes both tables carry, but a brand-new code from the provider
+	// is admitted only while the union is below the cap.
+	storedRates := normalizeCurrencyRates(stored["rates"])
 	merged := make(map[string]any, len(storedRates)+len(fetched))
 	for code, rate := range storedRates {
 		merged[code] = rate
 	}
-	// Fetched wins: the union is the stored table plus every code this provider
-	// published. The normalizer then drops anything unusable and applies
-	// maxCurrencyRates in sorted order, so the cap stays deterministic.
-	for code, rate := range fetched {
-		merged[code] = rate
+
+	overlaid := make([]string, 0, len(fetched))
+	for code := range fetched {
+		overlaid = append(overlaid, code)
+	}
+	sort.Strings(overlaid)
+	for _, code := range overlaid {
+		normalized, ok := normalizeCurrencyCode(code)
+		if !ok {
+			continue
+		}
+		rate, ok := currencyRate(fetched[code])
+		if !ok {
+			continue
+		}
+		if _, stored := merged[normalized]; !stored && len(merged) >= maxCurrencyRates {
+			continue
+		}
+		merged[normalized] = rate
 	}
 	return normalizeCurrencyRates(merged), missingRequestedRates(fetched, codes)
 }

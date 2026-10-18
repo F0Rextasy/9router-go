@@ -10,8 +10,10 @@ uncovered currency and reset the cost surfaces to the compiled seed.
 - `internal/handlers/dashboard/currency.go`:
   - `mergeRefreshedRates` overlays the fetched rates on top of the stored table,
     so every pre-existing manual rate survives while the provider's fresh rates
-    overwrite matching codes. The merged table respects `maxCurrencyRates` in
-    deterministic sorted order.
+    overwrite matching codes. Stored codes hold their `maxCurrencyRates` slots:
+    a table already at the cap cannot lose its alphabetically-last manual rate to
+    a code the provider published, and a fetched rate that does not fit is simply
+    not stored (it shows up as a lower `ratesStored`, not as a deleted rate).
   - Returns `ratesMissing`, reporting requested codes absent from the provider's
     payload in request order. Both the primary response path and the fallback
     response path include `ratesMissing: missing`.
