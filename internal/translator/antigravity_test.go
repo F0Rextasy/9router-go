@@ -494,6 +494,19 @@ func TestStripCompetitivePrompts_HermesIdentityVariants(t *testing.T) {
 			want:  "You are an AI assistant.",
 		},
 		{
+			// Upstream's expression has a literal single space in "Nous
+			// Research" (open-sse/config/appConstants.js:189), so other
+			// whitespace is not a match and is left alone.
+			name:  "double space before Research is left alone",
+			input: "You are Hermes Agent, built by Nous  Research.",
+			want:  "You are Hermes Agent, built by Nous  Research.",
+		},
+		{
+			name:  "tab before Research is left alone",
+			input: "You are Hermes Agent, built by Nous\tResearch.",
+			want:  "You are Hermes Agent, built by Nous\tResearch.",
+		},
+		{
 			name:  "lowercase",
 			input: "you are hermes agent, an AI agent.",
 			want:  "You are an AI assistant.",

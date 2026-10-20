@@ -247,7 +247,12 @@ var (
 	// reached the Antigravity backend with the fingerprint intact and could
 	// trigger a fake 429 RESOURCE_EXHAUSTED (parity with decolua/9router
 	// commit a61fc6a0).
-	hermesIdentityRegex = regexp.MustCompile(`(?i)You are Hermes(?: Agent)?(?:,\s*(?:an intelligent AI assistant|an AI assistant|an AI agent))?(?:,?\s*(?:built|created)\s+by\s+Nous\s+Research)?\.`)
+	//
+	// The upstream expression is transliterated exactly, including the
+	// literal single space in "Nous Research" — upstream does not accept
+	// other whitespace between the two words, and a port that accepted more
+	// would rewrite phrasings upstream leaves alone.
+	hermesIdentityRegex = regexp.MustCompile(`(?i)You are Hermes(?: Agent)?(?:,\s*(?:an intelligent AI assistant|an AI assistant|an AI agent))?(?:,?\s*(?:built|created)\s+by\s+Nous Research)?\.`)
 )
 
 // normalizeHarnessMarkers neutralizes harness fingerprint tags in system text.
