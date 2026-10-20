@@ -29,7 +29,18 @@ passes:
 | none (merged code) | pass |
 | rename in the system instruction only | fail — `system instruction text incorrectly contains renamed form` |
 | rename in the conversation contents only | fail — `content part text incorrectly contains renamed form` |
-| the Claude Agent SDK control phrase left in the blacklist | fail — `control phrase ... was not stripped from upstream body` |
+| the Claude Agent SDK control phrase dropped from the blacklist | fail — `control phrase ... was not stripped from upstream body` |
 
-The pre-fix code still fails the corrected test with the same signature it had
-before, so the test keeps its original value.
+The pre-fix code still fails the corrected test, so the test keeps its
+original value. The failure carries the four raw-body checks it had before
+plus the two envelope assertions the corrected struct now reaches, because the
+pre-fix code renames in both slots:
+
+```
+provider_branding_rewrite_test.go:76: upstream request body missing literal "opencode"
+provider_branding_rewrite_test.go:76: upstream request body missing literal "opencode-zen"
+provider_branding_rewrite_test.go:76: upstream request body missing literal "opencode-go"
+provider_branding_rewrite_test.go:76: upstream request body missing literal "C:/Users/admin/.opencode/db/data.sqlite"
+provider_branding_rewrite_test.go:119: system instruction text incorrectly contains renamed form "antigravity"
+provider_branding_rewrite_test.go:125: content part text incorrectly contains renamed form "antigravity"
+```
