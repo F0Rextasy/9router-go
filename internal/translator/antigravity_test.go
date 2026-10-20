@@ -438,8 +438,98 @@ func TestStripCompetitivePrompts_HermesAndBillingHeader(t *testing.T) {
 	if strings.Contains(sys, "created by Nous Research") {
 		t.Errorf("expected Nous Research stripped from Hermes identity, got %q", sys)
 	}
-	if !strings.Contains(sys, "You are Hermes Agent. You are an intelligent AI assistant.") {
+	if !strings.Contains(sys, "You are an AI assistant.") {
 		t.Errorf("expected sanitized Hermes identity, got %q", sys)
+	}
+	if strings.Contains(sys, "Hermes") {
+		t.Errorf("expected Hermes fingerprint removed, got %q", sys)
+	}
+}
+
+// TestStripCompetitivePrompts_HermesIdentityVariants covers every identity
+// variant upstream decolua/9router rewrites (commit a61fc6a0,
+// open-sse/config/appConstants.js:189). The old rule only matched the exact
+// legacy sentence, so every other variant reached the Antigravity backend
+// with the Hermes fingerprint intact and could trigger the fake 429
+// RESOURCE_EXHAUSTED.
+func TestStripCompetitivePrompts_HermesIdentityVariants(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "legacy sentence",
+			input: "You are Hermes Agent, an intelligent AI assistant.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "bare name",
+			input: "You are Hermes.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "assistant with comma created by",
+			input: "You are Hermes Agent, an intelligent AI assistant, created by Nous Research.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "agent built by",
+			input: "You are Hermes Agent, built by Nous Research.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "ai assistant variant",
+			input: "You are Hermes, an AI assistant.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "ai agent variant",
+			input: "You are Hermes, an AI agent.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "assistant created by without comma",
+			input: "You are Hermes Agent, an intelligent AI assistant created by Nous Research.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "lowercase",
+			input: "you are hermes agent, an AI agent.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "uppercase",
+			input: "YOU ARE HERMES.",
+			want:  "You are an AI assistant.",
+		},
+		{
+			name:  "without trailing period is left alone",
+			input: "You are Hermes",
+			want:  "You are Hermes",
+		},
+		{
+			name:  "embedded in surrounding text",
+			input: "Hello. You are Hermes, an AI agent. Goodbye.",
+			want:  "Hello. You are an AI assistant. Goodbye.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &translator.GeminiRequest{
+				SystemInstruction: &translator.GeminiContent{
+					Role:  "user",
+					Parts: []translator.GeminiPart{{Text: tt.input}},
+				},
+			}
+
+			stripped := translator.StripCompetitivePrompts(req)
+			got := stripped.SystemInstruction.Parts[0].Text
+			if got != tt.want {
+				t.Errorf("StripCompetitivePrompts() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

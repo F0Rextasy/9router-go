@@ -235,7 +235,13 @@ var (
 	harnessBrandOMP             = regexp.MustCompile(`(?i)Oh My Pi`)
 	harnessBrandOMPLive         = regexp.MustCompile(`(?i)omp Live`)
 	claudeBillingHeaderRegex    = regexp.MustCompile(`(?im)^x-anthropic-billing-header:[^\n]*(?:\r?\n)*`)
-	hermesIdentityRegex         = regexp.MustCompile(`(?i)You are Hermes Agent,\s*(an intelligent AI assistant)(?: created by Nous Research)?\.`)
+	// hermesIdentityRegex matches every Hermes identity variant upstream
+	// rewrites, and the whole match is replaced by a neutral sentence. The
+	// legacy rule only matched one exact phrasing, so the other variants
+	// reached the Antigravity backend with the fingerprint intact and could
+	// trigger a fake 429 RESOURCE_EXHAUSTED (parity with decolua/9router
+	// commit a61fc6a0).
+	hermesIdentityRegex = regexp.MustCompile(`(?i)You are Hermes(?: Agent)?(?:,\s*(?:an intelligent AI assistant|an AI assistant|an AI agent))?(?:,?\s*(?:built|created)\s+by\s+Nous\s+Research)?\.`)
 )
 
 // normalizeHarnessMarkers neutralizes harness fingerprint tags in system text.
@@ -263,7 +269,7 @@ func rewriteBrandingText(text string, isSystemInstruction bool) string {
 		text = strings.ReplaceAll(text, phrase, "")
 	}
 	text = claudeBillingHeaderRegex.ReplaceAllString(text, "")
-	text = hermesIdentityRegex.ReplaceAllString(text, "You are Hermes Agent. You are ${1}.")
+	text = hermesIdentityRegex.ReplaceAllString(text, "You are an AI assistant.")
 	if isSystemInstruction {
 		text = normalizeHarnessMarkers(text)
 	}
