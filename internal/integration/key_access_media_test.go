@@ -67,9 +67,10 @@ func TestRestrictedKeyDeniedOnEveryMediaEndpoint(t *testing.T) {
 			}
 			// The wire contract is the structured access denial, not the
 			// typed error's own sentence: writeModelAccessError emits one
-			// envelope shape for every endpoint that shares the gate.
-			if msg := res.ErrorMessage(t); !strings.Contains(msg, "Model not allowed") {
-				t.Errorf("error = %q, want it to name the access denial", msg)
+			// envelope shape for every endpoint that shares the gate, and
+			// the message names the model the client asked for.
+			if msg := res.ErrorMessage(t); !strings.Contains(msg, "denied-model") {
+				t.Errorf("error = %q, want it to name the denied model", msg)
 			}
 		})
 	}

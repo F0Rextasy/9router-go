@@ -329,6 +329,15 @@ func (h *ChatHandler) checkModelAccess(key *models.APIKey, modelID string) error
 
 // writeModelAccessError maps a gate error onto the wire: a policy failure is 503,
 // a typed denial is 403, anything else is a 400.
+//
+// The 403 envelope comes from the shared writer (handlerutil.WriteJSONError),
+// so its type and code are permission_error / insufficient_quota — the same
+// pair upstream's ERROR_TYPES[403] produces (open-sse/config/errorConfig.js).
+// The message is the typed error's own sentence, so it names the model the
+// client asked for.
+//
+// The 503 policy failure keeps its own shape: it is not an upstream status,
+// so it carries a code of its own rather than the status-derived one.
 func writeModelAccessError(w http.ResponseWriter, err error) {
 	if IsPolicyUnavailable(err) {
 		handlerutil.WriteJSON(w, http.StatusServiceUnavailable, map[string]any{
@@ -341,13 +350,7 @@ func writeModelAccessError(w http.ResponseWriter, err error) {
 		return
 	}
 	if IsModelNotAllowed(err) {
-		handlerutil.WriteJSON(w, http.StatusForbidden, map[string]any{
-			"error": map[string]string{
-				"message": "Model not allowed for this API key",
-				"type":    "permission_denied",
-				"code":    "model_not_allowed",
-			},
-		})
+		handlerutil.WriteJSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	handlerutil.WriteJSONError(w, http.StatusBadRequest, err.Error())
