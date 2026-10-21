@@ -30,6 +30,9 @@ import (
 // a pure-Go TLS library, and that was asserted rather than tested.
 type geminiWebStealthClient struct {
 	client tls_client.HttpClient
+	// origin is the site this session belongs to. The session's cookies are
+	// copied from here when another host has to carry them.
+	origin string
 }
 
 // geminiWebTLSProfile is the Chrome build the fingerprint is taken from. It is
@@ -70,7 +73,7 @@ func newGeminiWebStealthClient(reference *http.Client, origin, credential string
 	if err != nil {
 		return nil, fmt.Errorf("gemini-web: build TLS client: %w", err)
 	}
-	stack := &geminiWebStealthClient{client: client}
+	stack := &geminiWebStealthClient{client: client, origin: origin}
 	// The credential is seeded once, here, and never again: the jar is the one
 	// place a cookie's current value lives. Re-seeding on each call would put the
 	// value the user pasted back over one the site has since rotated.
@@ -151,6 +154,60 @@ func (s *geminiWebStealthClient) seedCredential(origin, credential string) {
 	if len(cookies) > 0 {
 		s.client.SetCookies(u, cookies)
 	}
+}
+
+// geminiWebSessionCookieNames are the Google session cookies the site's own
+// client carries to the content-push service.
+//
+// The reference bridge sends the whole header it holds
+// (azrinaldi/gemini-stealth-bridge internal/cookies/jar.go, EssentialNames),
+// and this is that list. A cookie outside it is not a session cookie, and
+// handing one to a second host is handing away something the user did not
+// mean to share.
+var geminiWebSessionCookieNames = map[string]bool{
+	"SID": true, "HSID": true, "SSID": true, "APISID": true, "SAPISID": true,
+	"__Secure-1PSID": true, "__Secure-1PAPISID": true,
+	"__Secure-3PSID": true, "__Secure-3PAPISID": true,
+	"__Secure-1PSIDTS": true, "__Secure-3PSIDTS": true,
+	"SIDCC": true, "__Secure-1PSIDCC": true, "__Secure-3PSIDCC": true,
+	"NID": true, "AEC": true,
+}
+
+// shareCredentialTo copies the session's cookies to another host.
+//
+// The content-push service the image is uploaded to is a different host from
+// the site, and Google's own composer carries the session cookie across to
+// it. A jar is per-host, so the site's cookies are not there to be sent: an
+// upload made without them belongs to no session, and a signed-in account
+// whose upload is anonymous gets an attachment the model cannot resolve.
+//
+// The values are read back out of the jar rather than from the configured
+// credential, so a cookie the site has since rotated is the one that travels.
+func (s *geminiWebStealthClient) shareCredentialTo(target string) {
+	if s.origin == "" || strings.TrimSpace(target) == "" {
+		return
+	}
+	source, err := url.Parse(s.origin)
+	if err != nil {
+		return
+	}
+	destination, err := url.Parse(target)
+	if err != nil {
+		return
+	}
+	if source.Host == destination.Host {
+		return
+	}
+	shared := make([]*fhttp.Cookie, 0, 8)
+	for _, cookie := range s.client.GetCookies(source) {
+		if geminiWebSessionCookieNames[cookie.Name] {
+			shared = append(shared, cookie)
+		}
+	}
+	if len(shared) == 0 {
+		return
+	}
+	s.client.SetCookies(destination, shared)
 }
 
 // closeIdleConnections drops pooled connections whose TLS session may have been

@@ -2247,7 +2247,7 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "icon": "auto_awesome",
     "website": "https://gemini.google.com",
     "authType": "cookie",
-    "authHint": "Optional. Works with no cookie at all — an anonymous gemini.google.com session reaches one model. Paste __Secure-1PSID from a signed-in tab to reach the others.",
+    "authHint": "Optional. Works with no cookie at all — an anonymous gemini.google.com session reaches one model. To reach the others, paste the WHOLE cookie header of a signed-in tab (DevTools → Application → Cookies): __Secure-1PSID, SAPISID and __Secure-1PSIDTS. Without SAPISID the site answers as an anonymous visitor, so the session stays on one model.",
     "noAuth": false,
     "serviceKinds": [
       "llm"
