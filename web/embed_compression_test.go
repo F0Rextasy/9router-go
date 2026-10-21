@@ -277,3 +277,101 @@ func TestCompressedVariantsExistForTheBundle(t *testing.T) {
 		}
 	}
 }
+
+// The response body depends on the request's Accept-Encoding even when no
+// compressed variant is served: the identity body and the compressed body
+// are different bytes for the same URL. A shared cache that stored one and
+// handed it to a client that asked for the other would break the page, so
+// Vary has to be on every path — not only on the compressed one.
+func TestVaryIsSetOnEveryNegotiatedResponse(t *testing.T) {
+	h := web.Handler()
+	js := assetPath(t)
+
+	for _, tc := range []struct {
+		name   string
+		accept string
+	}{
+		{"no Accept-Encoding at all", ""},
+		{"identity only", "identity"},
+		{"gzip", "gzip"},
+		{"brotli", "br"},
+		{"both", "gzip, deflate, br"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/"+js, nil)
+			if tc.accept != "" {
+				req.Header.Set("Accept-Encoding", tc.accept)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", rec.Code)
+			}
+			if got := rec.Header().Get("Vary"); !strings.Contains(got, "Accept-Encoding") {
+				t.Errorf("Vary = %q, want it to contain Accept-Encoding", got)
+			}
+		})
+	}
+}
+
+// A range request has to be answered against the bytes that are actually
+// sent. The handler used to answer ranges through http.FileServer, and
+// replacing it with a plain write dropped that silently: a client asking for
+// part of a file got the whole file with a 200, and a client asking past the
+// end got a 200 instead of a 416.
+func TestHandlerAnswersRangeRequests(t *testing.T) {
+	h := web.Handler()
+	js := assetPath(t)
+
+	t.Run("a byte range is answered with 206 and the requested bytes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/"+js, nil)
+		req.Header.Set("Range", "bytes=0-99")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusPartialContent {
+			t.Fatalf("status = %d, want 206", rec.Code)
+		}
+		if got := rec.Header().Get("Content-Range"); got == "" {
+			t.Error("Content-Range is missing")
+		}
+		if rec.Body.Len() != 100 {
+			t.Errorf("body is %d bytes, want 100", rec.Body.Len())
+		}
+		if got := rec.Header().Get("Content-Length"); got != "100" {
+			t.Errorf("Content-Length = %q, want %q", got, "100")
+		}
+	})
+
+	t.Run("a range past the end is answered with 416", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/"+js, nil)
+		req.Header.Set("Range", "bytes=999999999-")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusRequestedRangeNotSatisfiable {
+			t.Errorf("status = %d, want 416", rec.Code)
+		}
+	})
+
+	t.Run("a range against a compressed variant is resolved against the variant", func(t *testing.T) {
+		// The client sees the compressed bytes, so the range is a range of
+		// those. The total in Content-Range has to be the variant's length.
+		req := httptest.NewRequest(http.MethodGet, "/"+js, nil)
+		req.Header.Set("Accept-Encoding", "br")
+		req.Header.Set("Range", "bytes=0-99")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusPartialContent {
+			t.Fatalf("status = %d, want 206", rec.Code)
+		}
+		if got := rec.Header().Get("Content-Encoding"); got != "br" {
+			t.Errorf("Content-Encoding = %q, want %q", got, "br")
+		}
+		if rec.Body.Len() != 100 {
+			t.Errorf("body is %d bytes, want 100", rec.Body.Len())
+		}
+	})
+}

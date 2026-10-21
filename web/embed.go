@@ -123,6 +123,13 @@ func applyAssetHeaders(w http.ResponseWriter, name string) {
 // that stored the brotli variant would hand it to a client that cannot read
 // it.
 func serveFile(w http.ResponseWriter, r *http.Request, subFS fs.FS, name string) {
+	// The response body depends on the request's Accept-Encoding even when no
+	// variant is served: the identity body and the compressed body are
+	// different bytes for the same URL. A shared cache that stored one and
+	// handed it to a client that asked for the other would break the page,
+	// so Vary is set on every path — not only on the compressed one.
+	w.Header().Set("Vary", "Accept-Encoding")
+
 	encoding, variant := negotiateEncoding(r.Header.Get("Accept-Encoding"))
 	if variant != "" {
 		if serveVariant(w, r, subFS, name+variant, name, encoding) {
@@ -140,11 +147,28 @@ func serveFile(w http.ResponseWriter, r *http.Request, subFS fs.FS, name string)
 // written as-is; otherwise it is written with the matching Content-Encoding,
 // which is what tells the browser to decode it.
 //
-// The body is written directly rather than through http.ServeContent,
-// because ServeContent refuses to set a Content-Length for a response that
-// carries a Content-Encoding — it cannot know that the length on disk is the
-// length of the compressed body. The result was a chunked response with no
-// length, which costs the browser a chunk header per read.
+// The body goes through http.ServeContent, which is what answers range
+// requests (206, Content-Range, 416) and the conditional requests. The old
+// handler answered ranges too, through http.FileServer; dropping that was a
+// silent regression — a client that asked for part of a file got the whole
+// file with a 200 instead of a 206, and a client that asked past the end got
+// a 200 instead of a 416.
+//
+// ServeContent is handed the *variant's* own size, so a range is resolved
+// against the bytes that are actually on the wire. That matters for a
+// compressed variant: the range is a range of the compressed bytes, which is
+// the representation the client sees.
+//
+// ServeContent refuses to set a Content-Length for a response that carries a
+// Content-Encoding — it cannot know that the length it computed is the
+// length of the compressed body. The result is a chunked response with no
+// length, which costs the browser a chunk header per read. So the length is
+// set here, where the size is known.
+//
+// A range request is the one case where ServeContent sets the length
+// itself, and it sets it to the length of the range rather than of the whole
+// file. Setting it before the call would be wrong for a range, so it is only
+// set when there is no range.
 func serveVariant(w http.ResponseWriter, r *http.Request, subFS fs.FS, name, contentName, encoding string) bool {
 	f, err := subFS.Open(name)
 	if err != nil {
@@ -159,30 +183,31 @@ func serveVariant(w http.ResponseWriter, r *http.Request, subFS fs.FS, name, con
 
 	if encoding != "" {
 		w.Header().Set("Content-Encoding", encoding)
-		w.Header().Set("Vary", "Accept-Encoding")
 	}
-	w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", contentTypeFor(contentName))
 	}
 
-	if seeker, ok := f.(io.ReadSeeker); ok {
-		if _, copyErr := io.Copy(w, seeker); copyErr != nil {
+	seeker, ok := f.(io.ReadSeeker)
+	if !ok {
+		data, readErr := io.ReadAll(f)
+		if readErr != nil {
+			http.Error(w, "asset unavailable", http.StatusInternalServerError)
 			return true
 		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		// The client can disappear mid-write. The status line and headers are
+		// already on the wire by then, so there is nothing left to report and
+		// no second response to send — the bytes that did arrive are the ones
+		// that count.
+		_, _ = w.Write(data)
 		return true
 	}
 
-	data, readErr := io.ReadAll(f)
-	if readErr != nil {
-		http.Error(w, "asset unavailable", http.StatusInternalServerError)
-		return true
+	if r.Header.Get("Range") == "" {
+		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 	}
-	// The client can disappear mid-write. The status line and headers are
-	// already on the wire by then, so there is nothing left to report and
-	// no second response to send — the bytes that did arrive are the ones
-	// that count. This mirrors the io.Copy branch above.
-	_, _ = w.Write(data)
+	http.ServeContent(w, r, contentName, stat.ModTime(), seeker)
 	return true
 }
 
@@ -191,17 +216,40 @@ func serveVariant(w http.ResponseWriter, r *http.Request, subFS fs.FS, name, con
 // It exists because the served path sets the type itself rather than letting
 // http.FileServer infer it from the request URL — the SPA fallback serves
 // index.html for a request whose URL says something else entirely.
+//
+// The types the dashboard ships are pinned rather than looked up.
+// mime.TypeByExtension consults the machine's MIME database (/etc/mime.types
+// and friends) on top of Go's small builtin table, so the same binary serves
+// a different Content-Type on a different host — and a script served as the
+// wrong type is refused by the browser. The pinned list covers every
+// extension in the built dashboard; anything else falls back to the lookup.
 func contentTypeFor(name string) string {
-	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
-		return t
-	}
 	switch path.Ext(name) {
-	case ".js":
+	case ".js", ".mjs":
 		return "text/javascript; charset=utf-8"
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".html":
+		return "text/html; charset=utf-8"
+	case ".json":
+		return "application/json"
 	case ".webmanifest":
 		return "application/manifest+json"
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".ico":
+		return "image/vnd.microsoft.icon"
 	case ".woff2":
 		return "font/woff2"
+	case ".woff":
+		return "font/woff"
+	case ".txt":
+		return "text/plain; charset=utf-8"
+	}
+	if t := mime.TypeByExtension(path.Ext(name)); t != "" {
+		return t
 	}
 	return "application/octet-stream"
 }

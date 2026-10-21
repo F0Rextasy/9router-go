@@ -438,8 +438,12 @@ The embedded asset handler serves what it embeds. `web/scripts/precompress.ts` w
 - **Compress at build time, not at request time.** The gateway runs on a 1 vCPU box and already spends its CPU streaming LLM responses; the bundle never changes between releases, so per-request compression buys nothing the build-time variant did not.
 - **The pre-compression runs as part of `bun run build`**, not as a separate step someone has to remember. `vite build` clears `dist`, so a build that skips the compression leaves the gateway embedding an uncompressed bundle — the handler still works (it falls back to the original file), which is exactly why the omission is invisible until the transfer is measured. `web/embed_compression_test.go` pins the variants' existence so the omission fails the build instead.
 - Brotli is preferred over gzip **on a quality tie** — Chrome sends `gzip, deflate, br` with no `q` values, and header order says nothing about preference. On the current bundle: 1200 KB → 232 KB (brotli) / 306 KB (gzip).
-- The response must carry `Vary: Accept-Encoding`, and a `Content-Length` — `http.ServeContent` refuses to set one on a response with a `Content-Encoding`, which leaves the response chunked.
+- **`Vary: Accept-Encoding` belongs on every negotiated response**, not only on the compressed one. The identity body and the compressed body are different bytes for the same URL; a shared cache that stored one and handed it to a client that asked for the other breaks the page.
+- **A compressed variant must never be larger than the original.** The handler prefers the compressed variant whenever the client accepts it, so a variant that grew makes the client download *more* bytes than the identity body. The compressor skips a file whose variant is not smaller.
+- The response must carry a `Content-Length` — `http.ServeContent` refuses to set one on a response with a `Content-Encoding`, which leaves the response chunked.
 - A missing compression variant must fall back to the original file, never fail the request.
+- **Replacing a stdlib handler means auditing what it did for you.** Swapping `http.FileServer` for a plain write silently dropped range support: a client asking for part of a file got the whole file with a 200, and one asking past the end got a 200 instead of a 416. The body goes through `http.ServeContent`, handed the variant's own size so a range resolves against the bytes that are on the wire.
+- **Never write a stub over a built file.** The lint recipe (`mkdir -p web/dist && printf '<!doctype html>' > web/dist/index.html`) exists because `//go:embed` needs *something* to embed. Run it only when there is no build — overwriting a built `index.html` leaves its `.br` variant describing the old document, and the gateway prefers that variant.
 
 #### G.4 Measure the first paint, not just the build
 
@@ -615,8 +619,11 @@ make vet-svelte
 
 # Go lint/dispatch ratchet (CI `lint` job: golangci-lint on the diff, govulncheck,
 # oxlint, actionlint). golangci-lint reads source, but web/dist must exist or it
-# reports `pattern dist/*: no matching files found` as a typecheck failure:
-mkdir -p web/dist && printf '<!doctype html>' > web/dist/index.html
+# reports `pattern dist/*: no matching files found` as a typecheck failure.
+# The stub is written only when there is no build yet: overwriting a built
+# index.html would leave its pre-compressed `.br` variant describing the old
+# document, and the gateway prefers that variant.
+[ -f web/dist/index.html ] || { mkdir -p web/dist && printf '<!doctype html>' > web/dist/index.html; }
 golangci-lint run --new-from-rev="$(git merge-base origin/main HEAD)" ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 cd web && bunx oxlint --deny-warnings

@@ -38,6 +38,39 @@ What changed:
   file without anything failing. `web/embed_compression_test.go` now pins the
   variants' existence so that omission fails the build.
 
+Three defects found while reviewing the change, all fixed here:
+
+- **Range requests stopped working.** The rewrite replaced `http.FileServer`
+  with a plain write, which silently dropped range support: a client asking
+  for part of a file got the whole file with a 200, and a client asking past
+  the end got a 200 instead of a 416. The body goes through
+  `http.ServeContent` again, handed the variant's own size so a range is
+  resolved against the bytes that are on the wire.
+- **`Vary: Accept-Encoding` was only set on the compressed path.** The
+  identity body and the compressed body are different bytes for the same
+  URL, so a shared cache that stored one and handed it to a client that
+  asked for the other would break the page. The header is now set on every
+  negotiated response.
+- **A compressed variant could be larger than the original.** The handler
+  prefers the compressed variant whenever the client accepts it, so a
+  variant that grew would make the client download more bytes than the
+  identity body. The compressor now skips a file whose variant is not
+  smaller.
+
+Two more, found while checking the ports of the change:
+
+- **The Content-Type depended on the machine.** `mime.TypeByExtension`
+  consults the host's MIME database (`/etc/mime.types` and friends) on top
+  of Go's builtin table, so the same binary served a different type on a
+  different host — and a script served under the wrong type is refused by
+  the browser. The types the dashboard ships are now pinned.
+- **The lint recipe could leave a stale variant.** `mkdir -p web/dist &&
+  printf '<!doctype html>' > web/dist/index.html` exists because
+  `//go:embed` needs something to embed. Overwriting a built `index.html`
+  left its `.br` variant describing the old document, and the gateway
+  prefers that variant. The recipe now writes the stub only when there is
+  no build.
+
 Measured on the same machine, fresh browser context per run, gateway serving
 its own embedded assets:
 
@@ -62,11 +95,14 @@ transfer left (349 kB) and is not compressible further — woff2 is already
 deflate-based.
 
 Verification: `go test ./web/...` (new compression contract: the negotiated
-encoding, the `Vary` header, the decoded body matching the original file, the
-identity fallback, the SPA fallback, a missing asset still being a 404, and
-the compressed variants being present in the build output);
-`bun test src scripts` (503 pass, including a new guard that fails the build
-if a font CDN link comes back, and a size budget for the icon font);
+encoding, the `Vary` header on every negotiated response, the decoded body
+matching the original file, the identity fallback, the SPA fallback, a
+missing asset still being a 404, the compressed variants being present in the
+build output, and range requests answered with 206/416);
+`bun test src scripts` (508 pass, including a guard that fails the build if a
+font CDN link comes back, a size budget for the icon font, and a compressor
+test that a variant is never larger than the original);
 `bun run ratchet:svelte` (0 unresolved identifiers, baseline tightened from
 81 to 78); `oxlint --deny-warnings`; `go build ./...`; the cross-compile gate
-for all five release targets; and the integration suite.
+for all five release targets; the dashboard e2e suite (42 pass); and the
+integration suite.

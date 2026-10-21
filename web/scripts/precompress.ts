@@ -100,9 +100,9 @@ export function precompress(distRootPath: string = distRoot): void {
     if (!COMPRESSIBLE[extname(file).toLowerCase()]) continue
 
     const raw = readFileSync(file)
-    // Compressing a file that grew past this is pointless: the transfer cost
-    // of the compressed variant would exceed the original and the extra bytes
-    // would live in the binary forever.
+    // A file this small does not gain enough from compression to be worth
+    // the variant: the headers it saves are worth more than the bytes it
+    // saves, and every variant is another file in the binary.
     if (raw.length < MIN_COMPRESS_BYTES) continue
 
     const br = brotliCompressSync(raw, {
@@ -112,6 +112,17 @@ export function precompress(distRootPath: string = distRoot): void {
       },
     })
     const gz = gzipSync(raw, { level: 9 })
+
+    // A variant that is not smaller than the original is pure loss: the
+    // handler prefers the compressed variant whenever the client accepts it,
+    // so the client would download more bytes than the identity body, and
+    // the extra bytes would live in the binary forever. A file that does not
+    // compress — already-compressed content behind a compressible extension,
+    // or a short random blob — hits this.
+    if (br.length >= raw.length && gz.length >= raw.length) {
+      console.log(`  skipped ${file.slice(distRootPath.length + 1)} — the compressed variant is not smaller`)
+      continue
+    }
 
     writeFileSync(`${file}.br`, br)
     writeFileSync(`${file}.gz`, gz)
