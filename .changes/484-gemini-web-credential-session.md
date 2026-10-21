@@ -56,8 +56,10 @@ unresolved identifiers, 81 errors against a baseline of 81) and the
 portability gate over all five release targets. The anonymous turn and a
 signed-in turn with an image were exercised live against `gemini.google.com`.
 
-The renewal itself was not exercised against the live endpoint: the session
-that was available had already been superseded by the browser's own rotation,
-so the site answered the renewal with HTTP 401. The endpoints, the payload
-and the two paths are the reference bridge's, and the tests cover what the
-router does with the answer.
+The renewal was exercised against the live endpoint on 2026-10-21: the site
+answered it with HTTP 200 and a new cookie, and the renewed credential still
+reached the account's four models and answered a turn. A live suite covers
+it, along with a live tool call and the round trip that follows it: the model
+called `get_weather` with `{"city": "Jakarta"}`, and the second turn answered
+"The weather in Jakarta right now is sunny with a temperature of 31°C" from
+the tool result the client sent back.

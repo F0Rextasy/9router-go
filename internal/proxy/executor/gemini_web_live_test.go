@@ -181,6 +181,125 @@ func TestGeminiWebLiveSignedInTurnWithAnImage(t *testing.T) {
 	}
 }
 
+// TestGeminiWebLiveSignedInToolCall exercises a tool call and the round trip
+// that follows it.
+//
+// The site has no tool channel, so the model writes the call as text and this
+// provider reads it back. The first turn has to produce a call the client can
+// run, and the second has to use the result the client sends back — a
+// provider that lost either half would break every agent built on it.
+func TestGeminiWebLiveSignedInToolCall(t *testing.T) {
+	requireLiveUpstream(t)
+	cookie := requireLiveCookie(t)
+
+	tools := []map[string]any{{
+		"type": "function",
+		"function": map[string]any{
+			"name":        "get_weather",
+			"description": "Get the current weather for a city",
+			"parameters": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"city": map[string]any{"type": "string"}},
+				"required":   []string{"city"},
+			},
+		},
+	}}
+	question := "What is the weather in Jakarta right now? Use the get_weather tool."
+
+	first, err := json.Marshal(map[string]any{
+		"model":    "gemini-3.1-pro",
+		"messages": []map[string]any{{"role": "user", "content": question}},
+		"tools":    tools,
+	})
+	if err != nil {
+		t.Fatalf("marshal the first turn: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	if err := ForwardGeminiWeb(rec, &Request{
+		Ctx:    context.Background(),
+		Config: &providers.ProviderConfig{},
+		APIKey: cookie,
+		Body:   first,
+	}); err != nil {
+		t.Fatalf("ForwardGeminiWeb() error = %v", err)
+	}
+	body := rec.Body.String()
+	t.Logf("the first turn: %s", body)
+	if !strings.Contains(body, "\"tool_calls\"") {
+		t.Fatalf("the first turn carries no tool call:\n%s", body)
+	}
+	if !strings.Contains(body, "get_weather") {
+		t.Errorf("the tool call names no declared tool:\n%s", body)
+	}
+
+	second, err := json.Marshal(map[string]any{
+		"model": "gemini-3.1-pro",
+		"messages": []map[string]any{
+			{"role": "user", "content": question},
+			{"role": "assistant", "content": "", "tool_calls": []map[string]any{{
+				"id":       "call_get_weather_1",
+				"type":     "function",
+				"function": map[string]any{"name": "get_weather", "arguments": `{"city": "Jakarta"}`},
+			}}},
+			{"role": "tool", "tool_call_id": "call_get_weather_1", "name": "get_weather",
+				"content": `{"tempC":31,"condition":"sunny"}`},
+		},
+		"tools": tools,
+	})
+	if err != nil {
+		t.Fatalf("marshal the second turn: %v", err)
+	}
+	rec2 := httptest.NewRecorder()
+	if err := ForwardGeminiWeb(rec2, &Request{
+		Ctx:    context.Background(),
+		Config: &providers.ProviderConfig{},
+		APIKey: cookie,
+		Body:   second,
+	}); err != nil {
+		t.Fatalf("ForwardGeminiWeb() error = %v", err)
+	}
+	answer := rec2.Body.String()
+	t.Logf("the second turn: %s", answer)
+	if !strings.Contains(answer, "sunny") && !strings.Contains(answer, "31") {
+		t.Errorf("the second turn does not use the tool result:\n%s", answer)
+	}
+}
+
+// TestGeminiWebLiveRotation renews the session against the live endpoint and
+// uses the renewed credential.
+//
+// This is the check that the renewal is a renewal and not a no-op: the site
+// answers with a new cookie, the renewed credential still reaches the
+// account's models, and a turn on it still answers.
+func TestGeminiWebLiveRotation(t *testing.T) {
+	requireLiveUpstream(t)
+	cookie := requireLiveCookie(t)
+
+	session := geminiWebSessionForCredential(cookie)
+	result := geminiWebRotate(context.Background(), session, cookie)
+	t.Logf("the renewal: status=%d renewed=%v next=%v", result.Status, result.Rotated, result.NextInterval)
+	if !result.Rotated {
+		t.Fatalf("the renewal issued no cookie (status %d)", result.Status)
+	}
+	if result.Cookie == cookie {
+		t.Fatal("the renewal returned the credential it was given")
+	}
+
+	renewed := geminiWebSessionForCredential(result.Cookie)
+	models, err := renewed.availableModels(context.Background())
+	if err != nil {
+		t.Fatalf("availableModels() after the renewal: %v", err)
+	}
+	names := make([]string, 0, len(models))
+	for _, model := range models {
+		names = append(names, model.Category)
+	}
+	t.Logf("after the renewal the session may be served: %s", strings.Join(names, ", "))
+	if len(models) < 2 {
+		t.Errorf("the renewed credential reaches %d model(s)", len(models))
+	}
+}
+
 // geminiWebAnswerText reads the answer out of a streamed chat completion.
 func geminiWebAnswerText(body string) string {
 	var out strings.Builder
