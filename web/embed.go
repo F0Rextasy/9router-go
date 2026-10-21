@@ -79,7 +79,7 @@ func isFile(subFS fs.FS, name string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	stat, err := f.Stat()
 	if err != nil {
 		return false
@@ -150,7 +150,7 @@ func serveVariant(w http.ResponseWriter, r *http.Request, subFS fs.FS, name, con
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	stat, err := f.Stat()
 	if err != nil || stat.IsDir() {
@@ -178,7 +178,11 @@ func serveVariant(w http.ResponseWriter, r *http.Request, subFS fs.FS, name, con
 		http.Error(w, "asset unavailable", http.StatusInternalServerError)
 		return true
 	}
-	w.Write(data)
+	// The client can disappear mid-write. The status line and headers are
+	// already on the wire by then, so there is nothing left to report and
+	// no second response to send — the bytes that did arrive are the ones
+	// that count. This mirrors the io.Copy branch above.
+	_, _ = w.Write(data)
 	return true
 }
 
