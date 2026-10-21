@@ -338,11 +338,26 @@ few minutes. The router renews it in the background, so a signed-in account
 keeps reaching the models it pays for instead of falling back to one model
 after a few minutes.
 
-**Copy the cookie from an Incognito window that you close right after, not
-from a normal tab.** A browser that is still open keeps rotating the same
-session, and the browser and the router then renew it from two sides and
-cancel each other out — which signs the account out. A closed Incognito
-window is not rotating anything, so the router's renewal is the only one.
+**There are three ways to get a session, and the dashboard offers two of
+them as a button.**
+
+1. *A throwaway browser* — the safest. The button opens a browser with a
+   profile of its own, waits for the Google sign-in, reads the session out of
+   it, then closes the browser and deletes the profile. Nothing is left
+   running that could rotate the session, so the router's renewal is the
+   only one.
+2. *A browser that is already signed in* — the convenient one. The button
+   opens the browser's own cookie database, takes the key that seals it from
+   the platform's secret store (the login keyring on Linux, the Keychain on
+   macOS, the profile's "Local State" file on Windows), and unseals the
+   cookies. **A browser that is still open keeps rotating the same session**
+   and the router renews it from the other side, and the two cancel each
+   out — which signs the account out. Close the browser first, or use the
+   throwaway browser above. The dashboard says so when it finds a browser
+   that is running.
+3. *A cookie you paste* — the fallback. Copy the cookie header from an
+   Incognito window that you close right after, not from a normal tab, and
+   paste it into the connection form.
 
 Set `GEMINI_WEB_ROTATION=off` to run the router without renewing anything at
 all. That is the right choice when the credential belongs to a browser you

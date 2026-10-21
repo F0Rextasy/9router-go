@@ -39,6 +39,29 @@ was uploaded anonymously, and its session cookie was never renewed.
   Incognito window that is closed right after is the alternative, and the
   dashboard says so where the credential is pasted. The renewal can also be
   turned off entirely with `GEMINI_WEB_ROTATION=off`.
+- **A session could only be pasted, never read.** The dashboard now offers
+  two ways to get a session, and both are one click. The first opens a
+  browser with a throwaway profile of its own, reads the session out of it
+  once the sign-in is done, then closes the browser and deletes the profile.
+  The second reads the session out of a browser that is already signed in:
+  the browser's own cookie database is opened, the key that seals it is
+  taken from the platform's secret store, and the cookies are unsealed.
+
+  The second way is the convenient one and it carries a trade the first does
+  not — a browser that is running keeps rotating the same session the router
+  renews, and the two cancel each other out. The answer says so when it
+  finds a browser that is running, and names the throwaway browser as the
+  way to avoid it.
+
+  The reading is a port of the reference bridge's
+  (azrinaldi/gemini-stealth-bridge internal/cookies/chrome_sqlite.go) and
+  covers the Chromium cookie database: the database is copied before it is
+  read, because a browser writes to it while it runs; the key is taken from
+  the login keyring, the macOS Keychain, or the profile's own "Local State"
+  file on Windows; and the values are unsealed under either scheme a
+  Chromium uses. A machine whose key cannot be read — a browser with
+  App-Bound encryption, or a keyring that is locked — is told so plainly
+  rather than being reported as a browser with no session.
 - **A sealed credential was invisible to the connection list.** The
   single-row readers open the sealed columns before they hand a row back, but
   the list query did not, so every caller that read the credential from a
@@ -87,3 +110,17 @@ and the round trip that follows it: the model called `get_weather` with
 `{"city": "Jakarta"}`, and the second turn answered "The weather in Jakarta
 right now is sunny with a temperature of 31°C" from the tool result the client
 sent back.
+
+The import was measured the same way. The browser's own cookie database on a
+machine that runs Chrome was read through the new code: 38 Google cookies
+were found, all 38 were unsealed, and all 38 carried the host binding that
+Chrome 130 and later put in front of a value. The session that came out was
+asked for the model registry and was served Flash-Lite, Flash, Pro and Argon
+— the same four models a hand-pasted cookie header reaches, which is the
+check that matters, because a session the site does not recognise is no use
+to the router.
+
+The key that opens the cookies came from the login keyring over the secret
+service's D-Bus interface, because the machine that was measured on has the
+keyring and not the `secret-tool` command that normally asks it. Both are
+now tried, so a machine with either can be read.

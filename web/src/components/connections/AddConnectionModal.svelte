@@ -124,6 +124,9 @@
   /** The throwaway-browser sign-in is running, or its outcome. */
   let browserLogin = $state<'running' | 'done' | 'failed' | null>(null)
   let browserLoginNote = $state('')
+  /** The session read out of a browser that was already signed in. */
+  let chromeImport = $state<'running' | 'done' | 'failed' | null>(null)
+  let chromeImportNote = $state('')
 
   // Bulk state
   let bulkText = $state('')
@@ -265,6 +268,30 @@
     } catch (err) {
       browserLogin = 'failed'
       browserLoginNote = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  /**
+   * Read the session out of a browser that is already signed in.
+   *
+   * This is the convenient way in, and it carries a trade the throwaway
+   * browser does not: a browser that is running keeps rotating the same
+   * session this router renews, and the two cancel each other out. The
+   * server says so when it finds one, and the note is shown here.
+   */
+  async function handleChromeImport() {
+    chromeImport = 'running'
+    chromeImportNote = 'Reading the browser…'
+    try {
+      const res = await api.geminiWebImportChrome()
+      formApiKey = res.cookie
+      chromeImport = 'done'
+      chromeImportNote = res.warning || 'The session is filled in below — save the connection.'
+      validation = null
+      validationNote = ''
+    } catch (err) {
+      chromeImport = 'failed'
+      chromeImportNote = err instanceof Error ? err.message : String(err)
     }
   }
 
@@ -620,6 +647,28 @@
                   <span class="font-mono">__Secure-1PSIDTS</span>), then close the Incognito window
                   <span class="font-semibold">without signing out</span>.
                 </p>
+                <p class="text-xs text-text-muted mt-2">
+                  Already signed in a browser? Read the session out of it instead — that browser is running,
+                  so it keeps rotating the same session and the two will cancel each other out. Close it
+                  first, or use the throwaway browser above.
+                </p>
+                <div class="mt-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onclick={handleChromeImport}
+                    disabled={chromeImport === 'running'}
+                  >
+                    {chromeImport === 'running' ? 'Reading the browser...' : 'Read it from an open browser'}
+                  </Button>
+                </div>
+                {#if chromeImportNote}
+                  <p
+                    class="text-xs mt-2 {chromeImport === 'failed' ? 'text-red-500' : 'text-text-muted'}"
+                  >
+                    {chromeImportNote}
+                  </p>
+                {/if}
                 <p class="text-xs text-text-muted mt-2">
                   To run the router without renewing anything at all, set
                   <span class="font-mono">GEMINI_WEB_ROTATION=off</span> in the environment.
