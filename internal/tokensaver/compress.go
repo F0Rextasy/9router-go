@@ -264,7 +264,23 @@ func CompressMessagesWithConfig(body []byte, cfg RTKConfig) ([]byte, bool) {
 				}
 				command = cmdMap[callID]
 			}
-			if isErrorToolResult(msg) || isProtectedTool(name) {
+			if isErrorToolResult(msg) {
+				continue
+			}
+			if isProtectedTool(name) {
+				// A protected tool's result is not rewritten, with one
+				// exception: a line-numbered file dump, which upstream
+				// truncates safely (head and tail kept, the cut marked).
+				if output, ok := msg["output"].(string); ok {
+					if newOutput, did := compressProtectedText(output); did {
+						msg["output"] = newOutput
+						compressed = true
+					}
+				} else if outputArr, ok := msg["output"].([]any); ok {
+					if compressProtectedParts(outputArr, "input_text", "text") {
+						compressed = true
+					}
+				}
 				continue
 			}
 			if output, ok := msg["output"].(string); ok && len(output) > MinCompressSize {
@@ -295,7 +311,23 @@ func CompressMessagesWithConfig(body []byte, cfg RTKConfig) ([]byte, bool) {
 				}
 				command = cmdMap[callID]
 			}
-			if isErrorToolResult(msg) || isProtectedTool(name) {
+			if isErrorToolResult(msg) {
+				continue
+			}
+			if isProtectedTool(name) {
+				// A protected tool's result is not rewritten, with one
+				// exception: a line-numbered file dump, which upstream
+				// truncates safely (head and tail kept, the cut marked).
+				if content, ok := msg["content"].(string); ok {
+					if newContent, did := compressProtectedText(content); did {
+						msg["content"] = newContent
+						compressed = true
+					}
+				} else if contentArr, ok := msg["content"].([]any); ok {
+					if compressProtectedParts(contentArr, "text") {
+						compressed = true
+					}
+				}
 				continue
 			}
 			if content, ok := msg["content"].(string); ok && len(content) > MinCompressSize {
@@ -335,7 +367,16 @@ func CompressMessagesWithConfig(body []byte, cfg RTKConfig) ([]byte, bool) {
 					}
 					command = cmdMap[toolUseID]
 				}
-				if isErrorToolResult(block) || isProtectedTool(name) {
+				if isErrorToolResult(block) {
+					continue
+				}
+				if isProtectedTool(name) {
+					// A protected tool's result is not rewritten, with one
+					// exception: a line-numbered file dump, which upstream
+					// truncates safely (head and tail kept, the cut marked).
+					if compressProtectedBlock(block) {
+						compressed = true
+					}
 					continue
 				}
 
