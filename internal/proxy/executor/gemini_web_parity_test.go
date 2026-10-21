@@ -415,6 +415,108 @@ func TestGeminiWebRefusesAPrivateImageAddress(t *testing.T) {
 	}
 }
 
+// TestGeminiWebCarriesTheSessionToTheUploadHost pins the upload's cookie.
+//
+// The content-push service is a different host from the site, and a cookie jar
+// is per-host, so the session's cookies are not on the upload request unless
+// they are carried across. Google's own composer carries them. Without that,
+// a signed-in account's image is uploaded anonymously and the model cannot
+// resolve the attachment.
+//
+// The upload is served by a second server on purpose: an upload that went to
+// the site's own host would carry the cookie whether the copy happened or not.
+func TestGeminiWebCarriesTheSessionToTheUploadHost(t *testing.T) {
+	upstream := newGeminiWebFakeUpstream(t)
+	upstream.streamBody = geminiWebStreamFixture("it is blue")
+	server := withGeminiWebUpstream(t, upstream)
+
+	var uploadCookie string
+	push := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uploadCookie = r.Header.Get("cookie")
+		w.Write([]byte("/contrib_service/ttl_1d/test"))
+	}))
+	t.Cleanup(push.Close)
+	override := push.URL
+	geminiWebUploadEndpointOverride.Store(&override)
+	t.Cleanup(func() { geminiWebUploadEndpointOverride.Store(nil) })
+
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nfake"))
+	rec := httptest.NewRecorder()
+	err := ForwardGeminiWeb(rec, &Request{
+		Ctx:    context.Background(),
+		Config: geminiWebTestConfig(server),
+		APIKey: "__Secure-1PSID=psid-value; SAPISID=sapisid-value",
+		Body: geminiWebTestBody(t, "gemini-3.1-flash-lite", "what colour?", map[string]any{
+			"messages": []map[string]any{{
+				"role": "user",
+				"content": []map[string]any{
+					{"type": "text", "text": "what colour?"},
+					{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + png}},
+				},
+			}},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("ForwardGeminiWeb() error = %v", err)
+	}
+
+	if !strings.Contains(uploadCookie, "__Secure-1PSID=psid-value") {
+		t.Errorf("the upload cookie = %q, want the session's __Secure-1PSID", uploadCookie)
+	}
+	if !strings.Contains(uploadCookie, "SAPISID=sapisid-value") {
+		t.Errorf("the upload cookie = %q, want the session's SAPISID", uploadCookie)
+	}
+}
+
+// TestGeminiWebDoesNotCarryTheSessionToTheSiteItself proves the copy does not
+// reach the site twice.
+//
+// The site's own jar already carries these cookies, and a hand-written header
+// would be appended to the jar's rather than replace it — the same name twice,
+// which the site reads as a cancelled session.
+func TestGeminiWebDoesNotCarryTheSessionToTheSiteItself(t *testing.T) {
+	upstream := newGeminiWebFakeUpstream(t)
+	upstream.streamBody = geminiWebStreamFixture("ok")
+	server := withGeminiWebUpstream(t, upstream)
+
+	rec := httptest.NewRecorder()
+	err := ForwardGeminiWeb(rec, &Request{
+		Ctx:    context.Background(),
+		Config: geminiWebTestConfig(server),
+		APIKey: "__Secure-1PSID=psid-value; SAPISID=sapisid-value",
+		Body:   geminiWebTestBody(t, "gemini-3.1-flash-lite", "hi", nil),
+	})
+	if err != nil {
+		t.Fatalf("ForwardGeminiWeb() error = %v", err)
+	}
+
+	cookie := upstream.header("/app").Get("cookie")
+	if strings.Count(cookie, "__Secure-1PSID=") > 1 {
+		t.Errorf("the site's cookie = %q, carries __Secure-1PSID twice", cookie)
+	}
+}
+
+// TestGeminiWebReportsAnUnsignedCredential pins the advice a caller gets when
+// the session reaches one model although a cookie is configured.
+//
+// The cause is not a stale cookie: a credential without SAPISID cannot be
+// signed, and an unsigned registry call is answered as a visitor's. Telling
+// the caller to re-copy the cookie sends them round the loop.
+func TestGeminiWebReportsAnUnsignedCredential(t *testing.T) {
+	advice := geminiWebOnlyModelAdvice("__Secure-1PSID=psid-value")
+	if !strings.Contains(advice, "SAPISID") {
+		t.Errorf("advice = %q, want it to name the missing cookie", advice)
+	}
+	signed := geminiWebOnlyModelAdvice("__Secure-1PSID=psid-value; SAPISID=sapisid-value")
+	if strings.Contains(signed, "SAPISID") {
+		t.Errorf("advice = %q, must not blame a missing SAPISID on a signed credential", signed)
+	}
+	anonymous := geminiWebOnlyModelAdvice("")
+	if !strings.Contains(anonymous, "anonymous") {
+		t.Errorf("advice = %q, want it to say the session is anonymous", anonymous)
+	}
+}
+
 // slicesContains reports whether a list holds a value.
 func slicesContains(list []string, value string) bool {
 	for _, item := range list {

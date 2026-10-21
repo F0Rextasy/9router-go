@@ -44,3 +44,44 @@ func TestGeminiWebLiveAnonymousTurn(t *testing.T) {
 		t.Errorf("the stream carries no usage frame:\n%s", body)
 	}
 }
+
+// TestGeminiWebLiveSignedInTurn exercises the provider with a real signed-in
+// credential, which is the only way to see the account's paid models.
+//
+// The credential is read from the environment so it never reaches the
+// repository, and the test is skipped when it is absent. A credential without
+// SAPISID is refused rather than tested: the site answers it as a visitor's,
+// and a run that passed would prove nothing about a signed-in session.
+//
+// Run it with:
+//
+//	9ROUTER_LIVE_TESTS=1 \
+//	9ROUTER_LIVE_GEMINI_WEB_COOKIE='__Secure-1PSID=…; SAPISID=…; __Secure-1PSIDTS=…' \
+//	  go test ./internal/proxy/executor/ -run TestGeminiWebLiveSignedIn -v
+func TestGeminiWebLiveSignedInTurn(t *testing.T) {
+	if os.Getenv("9ROUTER_LIVE_TESTS") == "" {
+		t.Skip("live upstream test: set 9ROUTER_LIVE_TESTS=1 to run it against gemini.google.com")
+	}
+	cookie := strings.TrimSpace(os.Getenv("9ROUTER_LIVE_GEMINI_WEB_COOKIE"))
+	if cookie == "" {
+		t.Skip("live upstream test: set 9ROUTER_LIVE_GEMINI_WEB_COOKIE to a signed-in cookie header")
+	}
+	if !GeminiWebHasSAPISID(cookie) {
+		t.Fatal("the credential carries no SAPISID, so the site answers it as an anonymous visitor")
+	}
+
+	session := geminiWebSessionForCredential(cookie)
+	models, err := session.availableModels(context.Background())
+	if err != nil {
+		t.Fatalf("availableModels() error = %v", err)
+	}
+	names := make([]string, 0, len(models))
+	for _, model := range models {
+		names = append(names, model.Category)
+	}
+	t.Logf("the session may be served: %s", strings.Join(names, ", "))
+	if len(models) < 2 {
+		t.Errorf("the session reaches %d model(s); a signed-in account is expected to reach more than one",
+			len(models))
+	}
+}

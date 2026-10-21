@@ -31,7 +31,19 @@ it. The gaps and what changed:
   surface really does take an image. The upload endpoint is derived from the
   connection's origin, so a mirror or a test serves it from one server. A
   remote image is fetched through the repository's SSRF-guarded transport, so
-  a client cannot name a private address and have the router read it.
+  a client cannot name a private address and have the router read it. The
+  upload carries the session cookie to the push host, the way the site's own
+  composer does: a jar is per-host, so without the copy a signed-in account's
+  image is uploaded anonymously and the model cannot resolve the attachment.
+- **A signed-in account could not be told apart from an anonymous one.** The
+  model registry is answered as a visitor unless the call is signed, and the
+  signature needs the `SAPISID` cookie — a bare `__Secure-1PSID` is enough to
+  reach a page and not enough to reach the registry. The dashboard's "Check"
+  now signs its probe the way the executor signs its own, reports a credential
+  that carries no `SAPISID` as the cause rather than as a stale cookie, and the
+  refusal of an unreachable model names the same cause. The credential hint
+  asks for the whole cookie header instead of the one cookie that was not
+  enough.
 - **The answer reported zero tokens.** The site reports no counts, so they are
   estimated from the prompt that was sent and the answer that came back, with
   a CJK character counted as roughly a token rather than a quarter of one. The
@@ -63,6 +75,9 @@ number, the level clamp, the tool choice, the tool argument schema, the
 upload, the token estimate, the prompt sanitizer, the client formats), and
 with an integration suite that boots the real router against a fake site and
 asserts that a chat client and a streaming chat client both get an answer
-they can read. The anonymous turn was also exercised live against
+they can read. The session-carrying upload and the signed registry probe are
+covered too: the upload is served by a second server, so the test fails if the
+copy to the push host is dropped, and the probe is checked for the signature
+it sends. The anonymous turn was also exercised live against
 `gemini.google.com` on 2026-10-20: the site answered, the answer arrived as
 chat completion chunks, and the usage frame carried the estimated counts.

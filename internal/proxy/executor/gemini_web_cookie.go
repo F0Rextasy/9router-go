@@ -21,6 +21,30 @@ func GeminiWebCookieHeader(apiKey string) string {
 // probe does not carry a second copy that drifts.
 func GeminiWebUserAgent() string { return geminiWebUserAgent }
 
+// GeminiWebAuthorization renders the `authorization` header the site's
+// batchexecute endpoint expects from a signed-in caller, or an empty string
+// when the credential carries nothing to sign with.
+//
+// It is exported so the dashboard probe signs its registry call the same way
+// the executor does. A probe that asked for the model list without the
+// signature is answered as an anonymous visitor, so it cannot tell a signed-in
+// session from a dead one — it would report every working Pro account as
+// reaching one model.
+func GeminiWebAuthorization(cookie string) string {
+	return geminiWebSAPISIDHash(cookie, geminiWebOrigin)
+}
+
+// GeminiWebHasSAPISID reports whether a credential carries the cookie the
+// signed-in calls are signed with.
+//
+// A bare `__Secure-1PSID` is enough to reach a page, and the page then issues
+// an anti-CSRF token, so such a credential looks like it works. It is not
+// enough to reach the model registry: that RPC is answered as an anonymous
+// visitor without a signature, and an anonymous visitor is served one model.
+func GeminiWebHasSAPISID(cookie string) bool {
+	return geminiWebCookieValue(cookie, "SAPISID") != ""
+}
+
 // geminiWebPlaceholderKeys are the values the router substitutes for a provider
 // with no credential configured. They reach the executor as a real APIKey,
 // because `NoAuth` providers are dispatched with their catalog `DefaultAPIKey`

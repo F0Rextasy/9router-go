@@ -125,13 +125,23 @@ func geminiWebRequestedModel(envelope geminiWebRequestEnvelope) string {
 // and the fix is different: that one has to be replaced, while an anonymous
 // session has to be given one. Naming the wrong cause costs a support round
 // trip, so the advice follows the credential rather than assuming its absence.
+//
+// A third case sits between the two: a credential that carries no SAPISID
+// cannot be signed, and an unsigned registry call is answered as a visitor's.
+// The session then reaches one model however valid the cookie is, and the
+// only fix is a different copy of it.
 func geminiWebOnlyModelAdvice(cookie string) string {
-	if cookie != "" {
-		return "The configured __Secure-1PSID reaches this one model only — a signed-in tab that can use " +
-			"the others needs the cookie pasted again."
+	switch {
+	case cookie == "":
+		return "An anonymous session reaches one model — configure the cookie header of a signed-in " +
+			"gemini.google.com tab to reach the others."
+	case geminiWebCookieValue(cookie, "SAPISID") == "":
+		return "The configured cookie carries no SAPISID, so the site answers as an anonymous visitor and " +
+			"reaches one model. Paste the whole cookie header (__Secure-1PSID, SAPISID and __Secure-1PSIDTS)."
+	default:
+		return "The configured session reaches this one model only — a signed-in tab that can use the others " +
+			"needs the cookie pasted again."
 	}
-	return "An anonymous session reaches one model — configure a __Secure-1PSID cookie from a signed-in tab " +
-		"to reach the others."
 }
 
 // geminiWebSelectModel resolves the registry entry the turn is addressed to.

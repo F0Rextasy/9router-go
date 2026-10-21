@@ -77,7 +77,9 @@
     isCookie
       ? providerId === 'grok-web'
         ? 'sso=xxxxx... or just the raw value'
-        : 'eyJhbGciOi...'
+        : providerId === 'gemini-web'
+          ? '__Secure-1PSID=...; SAPISID=...; __Secure-1PSIDTS=...'
+          : 'eyJhbGciOi...'
       : isXaiApiKey
         ? 'xai-...'
         : providerId === 'qoder'
