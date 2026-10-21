@@ -25,10 +25,22 @@ import (
 //	SMART_TRUNCATE_TAIL       =  60  — lines kept from the bottom
 //	READ_NUMBERED_MIN_HIT_RATIO = 0.7 — share of sampled lines that must look
 //	                                  like "  N|content"
+//
+// Upstream has ONE threshold constant and TWO filters that compare against
+// it — open-sse/rtk/filters/smartTruncate.js and
+// open-sse/rtk/filters/readNumbered.js — both with a `<` comparison: a dump
+// of exactly 250 lines IS truncated, a shorter one is not. This package
+// mirrors that with one definition too: SmartTruncMin. The exported
+// ReadNumberedMinLines below is an alias of it, not a second copy of the
+// number.
 const (
 	// ReadNumberedMinLines is upstream's SMART_TRUNCATE_MIN_LINES. A dump
 	// with fewer lines than this is left alone.
-	ReadNumberedMinLines = 250
+	//
+	// It aliases SmartTruncMin so the number exists once in the package:
+	// this path and smartTruncate read the same constant, exactly as
+	// upstream's two filters read the same one.
+	ReadNumberedMinLines = SmartTruncMin
 
 	// ReadNumberedMinHitRatio is upstream's READ_NUMBERED_MIN_HIT_RATIO.
 	ReadNumberedMinHitRatio = 0.7
@@ -115,6 +127,32 @@ func compressReadNumbered(s string) string {
 // it asked for. A long line-numbered file dump is the one shape upstream
 // truncates safely, and the truncation keeps the content recognisable, so it
 // is the one shape the protected path lets through.
+//
+// The protected path applies upstream's FIXED constants — 120 lines of head,
+// 60 of tail, the 250-line threshold — and deliberately does NOT consult the
+// operator's RTK config. None of cfg.Deduplicate, cfg.Filters (with
+// MatchFilter), the category switch, cfg.MaxLines or cfg.Intensity (via
+// resolveLimits) is consulted here, where the generic path in
+// CompressTextDetailedWithCommand applies all of them. Two reasons:
+//
+//  1. Upstream's readNumbered filter takes no config at all
+//     (open-sse/rtk/filters/readNumbered.js reads the constants and
+//     nothing else), so upstream's answer for a numbered dump is always
+//     120/60. Threading cfg.MaxLines or cfg.Intensity through would make
+//     this port's bytes differ from upstream's, which is the one thing the
+//     port of that filter exists to fix.
+//  2. cfg.Deduplicate and the filter set rewrite content. A protected
+//     tool's result must not be rewritten — that guarantee is the point of
+//     the protected list (PR #454) — so only this one safe shape is let
+//     through, and only as a truncation.
+//
+// The consequence is visible in the numbers: on the same 300-line dump the
+// protected path yields 181 lines (120 head + marker + 60 tail), while the
+// generic path with the default config yields 81 and with
+// intensity=aggressive 51. An operator who tightens the RTK config gets a
+// tighter budget for unprotected tools and upstream's fixed constants for a
+// protected read/grep result. That divergence is deliberate, and it is
+// recorded in the changelog fragment for this change.
 func compressProtectedText(text string) (string, bool) {
 	if len(text) <= MinCompressSize {
 		return text, false

@@ -13,6 +13,12 @@ const (
 	MinCompressSize = 500
 	SmartTruncHead  = 120
 	SmartTruncTail  = 60
+	// SmartTruncMin is upstream's SMART_TRUNCATE_MIN_LINES
+	// (open-sse/rtk/constants.js). Upstream compares against it with a `<`
+	// in both filters that use it — open-sse/rtk/filters/smartTruncate.js
+	// and open-sse/rtk/filters/readNumbered.js — so a payload of exactly
+	// 250 lines IS truncated. This package keeps the number here, once, and
+	// both paths read it from here.
 	SmartTruncMin   = 250
 	GitDiffMaxLines = 100
 	GitLogMaxLines  = 200
@@ -524,7 +530,9 @@ func compressTree(s string) string {
 
 func smartTruncate(s string) string {
 	lines := strings.Split(s, "\n")
-	if len(lines) <= SmartTruncMin {
+	// `<` is upstream's comparison (open-sse/rtk/filters/smartTruncate.js):
+	// a payload of exactly SMART_TRUNCATE_MIN_LINES lines is truncated.
+	if len(lines) < SmartTruncMin {
 		return s
 	}
 	head := lines[:SmartTruncHead]
