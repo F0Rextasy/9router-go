@@ -1028,6 +1028,7 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 				map[string]any{"role": "tool", "tool_call_id": "c1", "is_error": true, "content": diff},
 				map[string]any{"role": "tool", "tool_call_id": "c2", "name": "Read", "content": diff},
 				map[string]any{"role": "tool", "tool_call_id": "c3", "name": "bash", "content": diff},
+				map[string]any{"role": "tool", "tool_call_id": "c4", "name": "command_runner", "content": diff},
 			},
 		}
 		in, err := json.Marshal(chatPayload)
@@ -1036,15 +1037,15 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 		}
 		out, ok := CompressMessagesWithConfig(in, cfg)
 		if !ok {
-			t.Fatal("expected compression for bash block")
+			t.Fatal("expected compression for command_runner block")
 		}
 		var res map[string]any
 		if err := json.Unmarshal(out, &res); err != nil {
 			t.Fatalf("unmarshal error: %v", err)
 		}
 		msgs := res["messages"].([]any)
-		if len(msgs) != 3 {
-			t.Fatalf("expected 3 messages, got %d", len(msgs))
+		if len(msgs) != 4 {
+			t.Fatalf("expected 4 messages, got %d", len(msgs))
 		}
 		// c1: is_error -> must remain untouched
 		m1 := msgs[0].(map[string]any)
@@ -1056,9 +1057,14 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 		if m2["content"].(string) != diff {
 			t.Errorf("expected c2 (Read) to remain uncompressed")
 		}
-		// c3: bash -> compressed
+		// c3: bash -> protected tool -> must remain untouched
 		m3 := msgs[2].(map[string]any)
-		assertContains(t, m3["content"].(string), "... (")
+		if m3["content"].(string) != diff {
+			t.Errorf("expected c3 (bash) to remain uncompressed")
+		}
+		// c4: command_runner -> compressed
+		m4 := msgs[3].(map[string]any)
+		assertContains(t, m4["content"].(string), "... (")
 	})
 
 	t.Run("Claude Messages tool_result", func(t *testing.T) {
@@ -1220,22 +1226,9 @@ func TestCompressMessagesWithConfig_PerBlockPreservation(t *testing.T) {
 		assertContains(t, msgs[2].(map[string]any)["content"].(string), "... (")
 	})
 
-	t.Run("Protected tools helper validation", func(t *testing.T) {
-		tools := []string{"Read", "Grep", "Edit", "Write", "patch", "anchor"}
-		for _, tool := range tools {
-			if !isProtectedTool(tool) {
-				t.Errorf("expected %q to be protected", tool)
-			}
-			if !isProtectedTool("  " + tool + "  ") {
-				t.Errorf("expected %q with whitespace to be protected", tool)
-			}
-		}
-		unprotected := []string{"bash", "sh", "terminal", "python", "curl"}
-		for _, tool := range unprotected {
-			if isProtectedTool(tool) {
-				t.Errorf("expected %q to be unprotected", tool)
-			}
-		}
+	t.Run("Error results helper validation", func(t *testing.T) {
+		// The protected-tool vocabulary is covered exhaustively, case variants
+		// included, by TestIsProtectedToolVocabulary in compress_protected_test.go.
 
 		if isErrorToolResult(nil) {
 			t.Error("expected nil map to not be error")

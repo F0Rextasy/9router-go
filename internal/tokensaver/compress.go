@@ -20,17 +20,32 @@ const (
 	TreeMaxLines    = 200
 )
 
+// protectedTools lists the tools whose result must never be compressed.
+// The keys are the canonical lowercase spellings: the repo canonicalises tool
+// names to lowercase elsewhere (internal/translator/fingerprint.go collapses
+// any case variant of the quartet onto "bash"/"glob"/"grep"/"read"), so a
+// case-sensitive lookup missed exactly the spellings the gateway itself
+// produces and summarised away a file the agent had asked to read.
 var protectedTools = map[string]bool{
-	"Read":   true,
-	"Grep":   true,
-	"Edit":   true,
-	"Write":  true,
+	// The canonical lowercase quartet (internal/translator/fingerprint.go:49).
+	"read": true,
+	"grep": true,
+	"bash": true,
+	"glob": true,
+	// The Claude Code file tools (internal/proxy/executor/claude_decloak.go:22).
+	"edit":         true,
+	"write":        true,
+	"notebookedit": true,
+	"webfetch":     true,
+	// Pre-existing entries.
 	"patch":  true,
 	"anchor": true,
 }
 
+// isProtectedTool reports whether a tool result under this name must be left
+// uncompressed. The match ignores case and surrounding whitespace.
 func isProtectedTool(name string) bool {
-	return protectedTools[strings.TrimSpace(name)]
+	return protectedTools[strings.ToLower(strings.TrimSpace(name))]
 }
 
 func isErrorToolResult(m map[string]any) bool {
