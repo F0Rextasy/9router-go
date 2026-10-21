@@ -30,10 +30,15 @@ was uploaded anonymously, and its session cookie was never renewed.
 
   The renewal and a browser that is still open do not get along: Google
   rotates the same session from both sides, and the two cancel each other
-  out, which signs the account out. The credential therefore has to be copied
-  from an Incognito window that is closed right after, and the dashboard says
-  so where the credential is pasted. The renewal can also be turned off
-  entirely with `GEMINI_WEB_ROTATION=off`.
+  out, which signs the account out. The credential therefore has to come from
+  a session nothing else is rotating, and the dashboard now offers one: a
+  button opens a browser with a throwaway profile of its own, reads the
+  session out of it once the sign-in is done, then closes the browser and
+  deletes the profile. Nothing is left running that could rotate the session,
+  so the router's renewal is the only one. Copying the cookies from an
+  Incognito window that is closed right after is the alternative, and the
+  dashboard says so where the credential is pasted. The renewal can also be
+  turned off entirely with `GEMINI_WEB_ROTATION=off`.
 - **A sealed credential was invisible to the connection list.** The
   single-row readers open the sealed columns before they hand a row back, but
   the list query did not, so every caller that read the credential from a

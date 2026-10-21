@@ -1140,6 +1140,13 @@ export const api = {
       return { supported: false, valid: false }
     }
   },
+  /**
+   * Open a throwaway browser and sign in to Gemini Web, so the session is
+   * captured without a browser that keeps running and rotating the same
+   * cookies. Answers with the cookie header to paste.
+   */
+  geminiWebBrowserLogin: async (): Promise<{ cookie: string }> =>
+    request<{ cookie: string }>('/api/providers/gemini-web/browser-login', { method: 'POST' }),
   updateConnection: (
     id: string,
     payload:

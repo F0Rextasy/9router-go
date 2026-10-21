@@ -121,6 +121,9 @@
   /** Set when the backend has no probe for this provider — no Valid/Invalid claim. */
   let validationNote = $state('')
   let saving = $state(false)
+  /** The throwaway-browser sign-in is running, or its outcome. */
+  let browserLogin = $state<'running' | 'done' | 'failed' | null>(null)
+  let browserLoginNote = $state('')
 
   // Bulk state
   let bulkText = $state('')
@@ -237,6 +240,32 @@
 
   async function handleValidate() {
     await runValidation()
+  }
+
+  /**
+   * Open a throwaway browser, sign in to Gemini Web there, and take the
+   * session it captured.
+   *
+   * The browser closes and its profile is deleted as soon as the session is
+   * read, so nothing is left running that could rotate the same cookies the
+   * router is about to use. That is the whole reason this exists: a session
+   * taken from a browser that keeps running is a session that expires, and
+   * a sign-out that looks unexplained.
+   */
+  async function handleBrowserLogin() {
+    browserLogin = 'running'
+    browserLoginNote = 'A browser window is opening — sign in to Google there. It closes by itself.'
+    try {
+      const res = await api.geminiWebBrowserLogin()
+      formApiKey = res.cookie
+      browserLogin = 'done'
+      browserLoginNote = 'Signed in. The cookie is filled in below — save the connection.'
+      validation = null
+      validationNote = ''
+    } catch (err) {
+      browserLogin = 'failed'
+      browserLoginNote = err instanceof Error ? err.message : String(err)
+    }
   }
 
   /**
@@ -558,16 +587,38 @@
                 about is the one that signs the account out.
               -->
               <div class="rounded-[10px] border border-warning/40 bg-warning/10 p-3">
-                <p class="text-xs font-semibold text-text-main">Copy the cookies from a closed Incognito window</p>
+                <p class="text-xs font-semibold text-text-main">
+                  Sign in through a throwaway browser
+                </p>
                 <p class="text-xs text-text-muted mt-1">
-                  Google rotates <span class="font-mono">__Secure-1PSIDTS</span> every few minutes, and a browser
-                  that is still open keeps rotating the same session. If you copy the cookies from a normal tab,
-                  the browser and this router renew the same session from two sides and cancel each other out —
-                  which signs the account out. Open an Incognito window, sign in, copy the whole cookie header
+                  Google rotates <span class="font-mono">__Secure-1PSIDTS</span> every few minutes, and the
+                  session is bound to it. A browser that is still open keeps rotating the same session this
+                  router is about to use, and the two cancel each other out — which signs the account out. The
+                  button below opens a browser with a profile of its own, reads the session out of it, then
+                  closes it and deletes the profile, so nothing is left running that could rotate it.
+                </p>
+                <div class="mt-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onclick={handleBrowserLogin}
+                    disabled={browserLogin === 'running'}
+                  >
+                    {browserLogin === 'running' ? 'Waiting for the sign-in...' : 'Open a throwaway browser'}
+                  </Button>
+                </div>
+                {#if browserLoginNote}
+                  <p
+                    class="text-xs mt-2 {browserLogin === 'failed' ? 'text-red-500' : 'text-text-muted'}"
+                  >
+                    {browserLoginNote}
+                  </p>
+                {/if}
+                <p class="text-xs text-text-muted mt-2">
+                  No browser to open? Open an Incognito window instead, sign in, copy the whole cookie header
                   (DevTools → Application → Cookies, including
                   <span class="font-mono">__Secure-1PSIDTS</span>), then close the Incognito window
-                  <span class="font-semibold">without signing out</span>. Nothing is rotating that session any
-                  more, so this router's renewal is the only one.
+                  <span class="font-semibold">without signing out</span>.
                 </p>
                 <p class="text-xs text-text-muted mt-2">
                   To run the router without renewing anything at all, set
