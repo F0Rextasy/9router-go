@@ -3,9 +3,24 @@ package tokensaver
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// reTruncationMarker matches the count a truncation marker reports:
+// "... (520 lines truncated by generic-output)".
+var reTruncationMarker = regexp.MustCompile(`\((\d+) lines truncated`)
+
+// rtkBodyLineCount counts the lines of a body, without counting the empty
+// string a trailing newline leaves behind.
+func rtkBodyLineCount(body string) int {
+	if body == "" {
+		return 0
+	}
+	return len(strings.Split(strings.TrimSuffix(body, "\n"), "\n"))
+}
 
 // rtkToolResult drives the public request path — CompressMessagesWithConfig,
 // the function the chat handler calls — with an OpenAI-shaped body: an
@@ -218,15 +233,32 @@ func TestRTK_TruncationStaysBounded(t *testing.T) {
 
 // The marker reports the lines that were really dropped, so a reader can tell
 // how much of the body it is not seeing.
+//
+// The count is compared against the body itself — the input's lines minus the
+// ones the result still carries — rather than against a fixed number, so the
+// assertion measures what the marker says about the body and stays true when
+// the head/tail split or the body size changes.
 func TestRTK_TruncationMarkerCountsTheDroppedLines(t *testing.T) {
 	content := rtkLogBody(601, 300, "ERROR database unreachable")
 
 	got := rtkToolResult(t, "docker compose up", content)
-	if !strings.Contains(got, "lines truncated") {
+	match := reTruncationMarker.FindStringSubmatch(got)
+	if match == nil {
 		t.Fatalf("the truncation marker is missing:\n%s", truncateForMessage(got))
 	}
+	claimed, err := strconv.Atoi(match[1])
+	if err != nil {
+		t.Fatalf("the marker count %q does not parse: %v", match[1], err)
+	}
+	// The marker line itself is not one of the body's lines.
+	dropped := rtkBodyLineCount(content) - (rtkBodyLineCount(got) - 1)
+	if claimed != dropped {
+		t.Fatalf("the marker claims %d dropped lines, the body is missing %d:\n%s",
+			claimed, dropped, truncateForMessage(got))
+	}
 	// The error line is kept, so the marker must not claim it was dropped.
-	if strings.Contains(got, "1 lines truncated") {
-		t.Fatalf("the marker counts a line that is still in the body:\n%s", truncateForMessage(got))
+	if !strings.Contains(got, "ERROR database unreachable") {
+		t.Fatalf("the error line was truncated away; the marker counts it as dropped:\n%s",
+			truncateForMessage(got))
 	}
 }
