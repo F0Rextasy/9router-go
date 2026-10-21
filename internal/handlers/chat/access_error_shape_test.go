@@ -4,7 +4,6 @@ import (
 	json "encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -16,19 +15,34 @@ import (
 // and drifted from that pair (and from the message, which upstream writes so
 // it names the model the client asked for).
 //
-// These cases pin the whole body — the type, the code AND the model in the
-// message — so the divergence cannot come back silently. A client that matches
-// on the type or the code breaks on a change, so the change has to be
-// deliberate.
+// These cases pin the whole body — the type, the code AND the exact message
+// string — so the divergence cannot come back silently. A client that matches
+// on the type, the code or the message breaks on a change, so the change has
+// to be deliberate. The message is compared in full, not by substring: any
+// wording that merely mentions the model would pass a substring check and
+// still be a different body from upstream's.
 
 func TestWriteModelAccessError_ForbiddenBodyMatchesUpstream(t *testing.T) {
 	tests := []struct {
 		name  string
 		model string
+		want  string
 	}{
-		{name: "openai model", model: "gpt-4o"},
-		{name: "provider qualified model", model: "openai/gpt-4o"},
-		{name: "combo name", model: "smart-mix"},
+		{
+			name:  "openai model",
+			model: "gpt-4o",
+			want:  `This API key is not allowed to use model "gpt-4o"`,
+		},
+		{
+			name:  "provider qualified model",
+			model: "openai/gpt-4o",
+			want:  `This API key is not allowed to use model "openai/gpt-4o"`,
+		},
+		{
+			name:  "combo name",
+			model: "smart-mix",
+			want:  `This API key is not allowed to use model "smart-mix"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -63,8 +77,8 @@ func TestWriteModelAccessError_ForbiddenBodyMatchesUpstream(t *testing.T) {
 				t.Errorf("error.code = %v, want insufficient_quota", errObj["code"])
 			}
 			msg, _ := errObj["message"].(string)
-			if !strings.Contains(msg, tt.model) {
-				t.Errorf("error.message = %q, want it to name the requested model %q", msg, tt.model)
+			if msg != tt.want {
+				t.Errorf("error.message = %q, want %q", msg, tt.want)
 			}
 		})
 	}
