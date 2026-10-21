@@ -56,10 +56,22 @@ unresolved identifiers, 81 errors against a baseline of 81) and the
 portability gate over all five release targets. The anonymous turn and a
 signed-in turn with an image were exercised live against `gemini.google.com`.
 
-The renewal was exercised against the live endpoint on 2026-10-21: the site
-answered it with HTTP 200 and a new cookie, and the renewed credential still
-reached the account's four models and answered a turn. A live suite covers
-it, along with a live tool call and the round trip that follows it: the model
-called `get_weather` with `{"city": "Jakarta"}`, and the second turn answered
-"The weather in Jakarta right now is sunny with a temperature of 31°C" from
-the tool result the client sent back.
+The renewal was exercised against the live endpoint on 2026-10-21, five times
+in a row: four renewals a minute apart were answered with HTTP 200 and a new
+cookie, and every renewed credential still reached the account's four
+models. A renewal issued inside the same minute was answered with HTTP 429,
+which is what the gap the worker uses is there to avoid — the worker renews
+every nine minutes, so it stays well clear of that.
+
+Those runs found a bug in the renewal itself: the site issues a fresh `NID`
+on every answer, including a refusal, so counting "the site sent something"
+as a renewal reported a refused renewal as a successful one — the caller
+would store a credential that reaches one model and believe the session had
+been renewed. A renewal now counts only when the cookie that carries the
+session moved.
+
+A live suite covers the renewal and the loop, along with a live tool call
+and the round trip that follows it: the model called `get_weather` with
+`{"city": "Jakarta"}`, and the second turn answered "The weather in Jakarta
+right now is sunny with a temperature of 31°C" from the tool result the client
+sent back.

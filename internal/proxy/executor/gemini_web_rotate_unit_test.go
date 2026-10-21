@@ -173,3 +173,33 @@ func TestGeminiWebEvictSession(t *testing.T) {
 		t.Error("evicting one session removed another")
 	}
 }
+
+// TestGeminiWebRefusedRenewalIsNotARenewal pins the refusal.
+//
+// The site issues a fresh NID on every answer, including a refusal, so a
+// renewal that counted "the site sent something" would report a refused
+// renewal as a successful one. The caller would then store a credential that
+// reaches one model and believe the session had been renewed — which is the
+// outcome this check exists to prevent.
+func TestGeminiWebRefusedRenewalIsNotARenewal(t *testing.T) {
+	credential := "__Secure-1PSID=psid-value; __Secure-1PSIDTS=old-ts; NID=old-nid"
+
+	// A refusal that carries a fresh NID and nothing else.
+	_, changed := geminiWebAbsorbSetCookies(credential, []*fhttp.Cookie{{Name: "NID", Value: "new-nid"}})
+	if changed {
+		t.Error("a fresh NID was counted as a renewal")
+	}
+
+	// A refusal that carries a fresh timestamp is a renewal.
+	_, changed = geminiWebAbsorbSetCookies(credential, []*fhttp.Cookie{{Name: "__Secure-1PSIDTS", Value: "new-ts"}})
+	if !changed {
+		t.Error("a renewed timestamp was not counted as a renewal")
+	}
+
+	// A refusal that deletes the timestamp is a change too: the credential
+	// the caller would store no longer carries a session.
+	_, changed = geminiWebAbsorbSetCookies(credential, []*fhttp.Cookie{{Name: "__Secure-1PSIDTS", Value: "", MaxAge: -1}})
+	if !changed {
+		t.Error("a deleted timestamp was not counted as a change")
+	}
+}

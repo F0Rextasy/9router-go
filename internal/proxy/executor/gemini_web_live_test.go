@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"hash/crc32"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	json "encoding/json/v2"
 
@@ -297,6 +299,63 @@ func TestGeminiWebLiveRotation(t *testing.T) {
 	t.Logf("after the renewal the session may be served: %s", strings.Join(names, ", "))
 	if len(models) < 2 {
 		t.Errorf("the renewed credential reaches %d model(s)", len(models))
+	}
+}
+
+// TestGeminiWebLiveRotationLoop renews the session several times in a row.
+//
+// One renewal proves that the endpoint answers. What the background worker
+// actually does is renew again and again, so the things that can only show up
+// over several renewals are the ones worth pinning:
+//
+//   - the site answers a second renewal inside the same minute with HTTP 429,
+//     so a worker that renewed too often would lock itself out;
+//   - each renewed credential has to keep reaching the account's models, or
+//     the renewal would quietly cost the account its paid models.
+//
+// The gap between the renewals is the site's own minute, so a run takes a
+// few minutes. It is a live test, so it only runs when one is asked for.
+func TestGeminiWebLiveRotationLoop(t *testing.T) {
+	requireLiveUpstream(t)
+	cookie := requireLiveCookie(t)
+
+	const renewals = 3
+	credential := cookie
+	for attempt := 1; attempt <= renewals; attempt++ {
+		session := geminiWebSessionForCredential(credential)
+		result := geminiWebRotate(context.Background(), session, credential)
+		t.Logf("renewal %d: status=%d renewed=%v next=%v",
+			attempt, result.Status, result.Rotated, result.NextInterval)
+		if !result.Rotated {
+			t.Fatalf("renewal %d issued no cookie (status %d)", attempt, result.Status)
+		}
+		if result.Status != http.StatusOK {
+			t.Fatalf("renewal %d was refused (status %d)", attempt, result.Status)
+		}
+		credential = result.Cookie
+
+		renewed := geminiWebSessionForCredential(credential)
+		models, err := renewed.availableModels(context.Background())
+		if err != nil {
+			t.Fatalf("renewal %d: the renewed credential is refused: %v", attempt, err)
+		}
+		names := make([]string, 0, len(models))
+		for _, model := range models {
+			names = append(names, model.Category)
+		}
+		t.Logf("renewal %d leaves the session able to be served: %s", attempt, strings.Join(names, ", "))
+		if len(models) < 2 {
+			t.Fatalf("renewal %d left the session reaching %d model(s)", attempt, len(models))
+		}
+
+		if attempt < renewals {
+			// The site's own minute. A renewal inside it is answered with
+			// HTTP 429, which is what the gap the worker uses is there to
+			// avoid.
+			wait := geminiWebRotateMinInterval + 5*time.Second
+			t.Logf("waiting %v before renewal %d", wait, attempt+1)
+			time.Sleep(wait)
+		}
 	}
 }
 

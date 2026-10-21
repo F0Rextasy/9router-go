@@ -180,6 +180,20 @@ var geminiWebSessionCookieNames = map[string]bool{
 	"NID": true, "AEC": true,
 }
 
+// geminiWebSessionCarryingCookies are the cookies a renewal has to move for
+// the session to have been renewed.
+//
+// The session is carried by the session id and its timestamp: a header
+// without them is answered as an anonymous visitor's. The other cookies the
+// site issues — `NID` above all — are refreshed on every answer, including a
+// refusal, so they say nothing about whether a renewal happened.
+var geminiWebSessionCarryingCookies = map[string]bool{
+	"__Secure-1PSID":   true,
+	"__Secure-1PSIDTS": true,
+	"__Secure-3PSID":   true,
+	"__Secure-3PSIDTS": true,
+}
+
 // shareCredentialTo copies the session's cookies to another host.
 //
 // The content-push service the image is uploaded to is a different host from

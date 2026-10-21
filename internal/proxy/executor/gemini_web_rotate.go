@@ -205,8 +205,13 @@ func geminiWebClampRotateInterval(interval time.Duration) time.Duration {
 // A cookie the site deleted — an empty value, a past expiry, or a negative
 // max-age — is removed rather than kept, and a cookie the site did not
 // mention keeps its value. The result is the credential to store, and
-// `changed` reports whether anything moved, so a rotation that renewed
-// nothing is not mistaken for one that did.
+// `changed` reports whether a cookie that decides the session moved.
+//
+// "Changed" deliberately means the cookie that carries the session, and not
+// "the site sent something": the site issues a fresh `NID` on every answer,
+// including a refusal, so counting that as a renewal would report a refused
+// renewal as a successful one — and the caller would then store a credential
+// that reaches one model and believe the session had been renewed.
 func geminiWebAbsorbSetCookies(cookie string, setCookies []*fhttp.Cookie) (string, bool) {
 	if len(setCookies) == 0 {
 		return cookie, false
@@ -233,12 +238,16 @@ func geminiWebAbsorbSetCookies(cookie string, setCookies []*fhttp.Cookie) (strin
 		if geminiWebCookieDeleted(issued) {
 			if _, present := values[name]; present {
 				delete(values, name)
-				changed = true
+				if geminiWebSessionCarryingCookies[name] {
+					changed = true
+				}
 			}
 			continue
 		}
 		if existing, present := values[name]; !present || existing != issued.Value {
-			changed = true
+			if geminiWebSessionCarryingCookies[name] {
+				changed = true
+			}
 		}
 		if _, present := values[name]; !present {
 			order = append(order, name)
