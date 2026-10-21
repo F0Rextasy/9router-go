@@ -193,6 +193,29 @@ func geminiWebSessionFor(req *Request) *geminiWebSession {
 	return session
 }
 
+// geminiWebEvictSession drops the session a credential owns.
+//
+// A session is keyed by its credential, and a renewed credential is a
+// different one, so every renewal would otherwise leave the previous
+// session behind. Without this the map grows by one entry per renewal, and
+// a rotation every nine minutes is 160 entries a day for one account.
+func geminiWebEvictSession(credential string) {
+	if credential == "" {
+		return
+	}
+	geminiWebSessionMu.Lock()
+	defer geminiWebSessionMu.Unlock()
+	for key, session := range geminiWebSessions {
+		if !strings.HasPrefix(key, credential+"\x00") {
+			continue
+		}
+		if session != nil && session.stealth != nil {
+			session.stealth.closeIdleConnections()
+		}
+		delete(geminiWebSessions, key)
+	}
+}
+
 // geminiWebTokens are the per-page tokens every later call echoes back.
 type geminiWebTokens struct {
 	// bl and fSid are required: without them a call cannot be formed at all.

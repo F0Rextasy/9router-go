@@ -1,7 +1,9 @@
 package executor
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,6 +15,11 @@ import (
 	tls_client "github.com/bogdanfinn/tls-client"
 	"github.com/bogdanfinn/tls-client/profiles"
 )
+
+// geminiWebRotateTimeout bounds one rotation call. The endpoint answers in
+// well under a second, so a longer wait means the call is not going to
+// happen.
+const geminiWebRotateTimeout = 20 * time.Second
 
 // geminiWebStealthClient is the TLS/HTTP2 stack this provider dials the site
 // with, instead of Go's net/http.
@@ -208,6 +215,69 @@ func (s *geminiWebStealthClient) shareCredentialTo(target string) {
 		return
 	}
 	s.client.SetCookies(destination, shared)
+}
+
+// postRotate issues the renewal request the site's own page makes.
+//
+// The endpoints are on accounts.google.com, so the request carries that
+// origin and refers to that page rather than to the site's — a request that
+// named gemini.google.com as its origin while posting to accounts.google.com
+// is not a request the site made.
+func (s *geminiWebStealthClient) postRotate(ctx context.Context, target, body string) (int, []*fhttp.Cookie, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, geminiWebRotateTimeout)
+	defer cancel()
+	request, err := fhttp.NewRequestWithContext(requestCtx, http.MethodPost, target, strings.NewReader(body))
+	if err != nil {
+		return 0, nil, fmt.Errorf("gemini-web: build rotation request: %w", err)
+	}
+	values := map[string]string{
+		"content-type":   "application/json",
+		"origin":         geminiWebRotateOrigin,
+		"referer":        geminiWebRotateOrigin + "/",
+		"sec-fetch-site": "same-origin",
+		"user-agent":     geminiWebUserAgent,
+	}
+	geminiWebSetOrdered(request.Header, geminiWebCORSOrder, values)
+	request.Header[fhttp.PHeaderOrderKey] = geminiWebPseudoHeaderOrder
+	response, err := s.do(request)
+	if err != nil {
+		return 0, nil, fmt.Errorf("gemini-web: rotation request: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	return response.StatusCode, response.Cookies(), nil
+}
+
+// getRotatePage reads the page the browser's rotation iframe loads.
+//
+// Its body carries the rotation id the renew request has to quote, and the
+// interval the site wants between renewals.
+func (s *geminiWebStealthClient) getRotatePage(ctx context.Context) (int, []*fhttp.Cookie, string, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, geminiWebRotateTimeout)
+	defer cancel()
+	request, err := fhttp.NewRequestWithContext(requestCtx, http.MethodGet, geminiWebRotatePageURL, nil)
+	if err != nil {
+		return 0, nil, "", fmt.Errorf("gemini-web: build rotation page request: %w", err)
+	}
+	values := map[string]string{
+		"user-agent":     geminiWebUserAgent,
+		"accept":         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+		"sec-fetch-site": "same-site",
+		"sec-fetch-mode": "navigate",
+		"sec-fetch-dest": "iframe",
+		"referer":        geminiWebOrigin + "/",
+	}
+	geminiWebSetOrdered(request.Header, geminiWebNavigationOrder, values)
+	request.Header[fhttp.PHeaderOrderKey] = geminiWebPseudoHeaderOrder
+	response, err := s.do(request)
+	if err != nil {
+		return 0, nil, "", fmt.Errorf("gemini-web: rotation page: %w", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return response.StatusCode, nil, "", fmt.Errorf("gemini-web: read rotation page: %w", err)
+	}
+	return response.StatusCode, response.Cookies(), string(body), nil
 }
 
 // closeIdleConnections drops pooled connections whose TLS session may have been
