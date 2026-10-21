@@ -289,6 +289,7 @@ func ForwardQoder(w http.ResponseWriter, req *Request) error {
 		_ = rewoundW.CloseWithError(qoderSSERewrite(resp.Body, rewoundW, built.QoderKey))
 	}()
 
+
 	if req.IsStream {
 		return execSSEStream(w, rewoundR, req)
 	}
