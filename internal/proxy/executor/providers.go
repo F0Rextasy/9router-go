@@ -1121,7 +1121,7 @@ func convertOpenAIMessagesToClaude(messages []any) (systemText string, claudeMes
 		if role == "tool" {
 			toolCallID, _ := msgMap["tool_call_id"].(string)
 			toolCallID = sanitizeToolUseID(toolCallID, toolIDMap)
-			contentVal := msgMap["content"]
+			contentVal := convertClaudeImageParts(msgMap["content"])
 			intermediate = append(intermediate, map[string]any{
 				"role": "user",
 				"content": []any{
@@ -1144,7 +1144,7 @@ func convertOpenAIMessagesToClaude(messages []any) (systemText string, claudeMes
 						"text": cStr,
 					})
 				} else if cArr, ok := msgMap["content"].([]any); ok && len(cArr) > 0 {
-					contentBlocks = append(contentBlocks, cArr...)
+					contentBlocks = append(contentBlocks, convertClaudeImageParts(cArr).([]any)...)
 				}
 				for _, tc := range toolCalls {
 					tcMap, ok := tc.(map[string]any)
@@ -1190,6 +1190,8 @@ func convertOpenAIMessagesToClaude(messages []any) (systemText string, claudeMes
 		intermediate = append(intermediate, claudeMessage(msgMap))
 	}
 
+	intermediate = dropImageEmptiedMessages(intermediate)
+
 	var merged []any
 	for _, m := range intermediate {
 		if len(merged) == 0 {
@@ -1222,6 +1224,13 @@ func claudeMessage(msgMap map[string]any) map[string]any {
 	for k, v := range msgMap {
 		if claudeMessageAllowedKeys[k] {
 			clean[k] = v
+		}
+	}
+	if content, has := clean["content"]; has {
+		converted := convertClaudeImageParts(content)
+		clean["content"] = converted
+		if emptiedByImageDrop(content, converted) {
+			clean[imageEmptiedMarker] = true
 		}
 	}
 	return clean
