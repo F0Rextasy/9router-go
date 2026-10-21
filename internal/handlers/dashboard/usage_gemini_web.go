@@ -35,10 +35,10 @@ func fetchGeminiWebUsage(ctx context.Context, apiKey string) usageResult {
 		// no allowance to report — so the emptiness is the site's answer, not
 		// a missing feature.
 		message := "Gemini Web connected, but the site reported no quota windows."
-		if !executor.GeminiWebHasSAPISID(cookie) {
-			message = "Gemini Web connected, but the site reported no quota: the cookie carries no SAPISID, " +
-				"so it is answered as an anonymous visitor. Paste the whole cookie header " +
-				"(__Secure-1PSID, SAPISID and __Secure-1PSIDTS) to see the account's windows."
+		if !executor.GeminiWebHasSessionTimestamp(cookie) {
+			message = "Gemini Web connected, but the site reported no quota: the cookie carries no " +
+				"__Secure-1PSIDTS, so it is answered as an anonymous visitor. Copy the whole cookie header, " +
+				"including __Secure-1PSIDTS, to see the account's windows."
 		}
 		return usageResult{plan: "Gemini Web", message: message}
 	}

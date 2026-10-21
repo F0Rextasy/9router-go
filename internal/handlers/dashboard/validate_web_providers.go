@@ -144,10 +144,11 @@ func deepSeekEnvelopeHasToken(body []byte) bool {
 // unauthenticated code. That keeps "Check" read-only rather than a billable
 // completion — the same constraint the deepseek-web probe is built to.
 //
-// The probe is signed the way the executor signs its own registry call. The
-// signature is what makes the site answer as a signed-in page rather than as
-// a visitor, and an unsigned probe cannot tell the two apart: it would report
-// every working Pro account as reaching one model.
+// The probe is signed the way the executor signs its own registry call, so a
+// probe that passes is evidence about the credential rather than about the
+// header set. The signature is not what decides the served set — measured
+// live on 2026-10-21, the site accepted the unsigned call too — but a signed
+// call is the request a signed-in page makes, so it is the one sent.
 //
 // With no cookie there is nothing to check and nothing to complain about: the
 // site answers an anonymous visitor, which is why the executor does not
@@ -185,11 +186,12 @@ func validateGeminiWeb(ctx context.Context, apiKey string) validateOutcome {
 	if !bytes.Contains(response, []byte("wrb.fr")) {
 		return validateOutcome{supported: true, message: geminiWebStaleCookieAdvice}
 	}
-	// A registry came back, but a credential with nothing to sign is answered
-	// as a visitor's: the session reaches one model however valid the cookie
-	// is. Reporting that as a working credential would send the user off to
-	// paste a cookie they already pasted.
-	if !executor.GeminiWebHasSAPISID(cookie) {
+	// A registry came back, but a credential with no `__Secure-1PSIDTS` is
+	// answered as a visitor's: that cookie is what carries the session to the
+	// registry, and without it the session reaches one model however valid
+	// the rest of the header is. Reporting that as a working credential sends
+	// the user off to paste a cookie they already pasted.
+	if !executor.GeminiWebHasSessionTimestamp(cookie) {
 		return validateOutcome{supported: true, message: geminiWebUnsignedCookieAdvice}
 	}
 	return validateOutcome{valid: true, supported: true}
@@ -197,9 +199,13 @@ func validateGeminiWeb(ctx context.Context, apiKey string) validateOutcome {
 
 // geminiWebUnsignedCookieAdvice names the credential that cannot reach the
 // signed-in models.
-const geminiWebUnsignedCookieAdvice = "this cookie carries no SAPISID, so gemini.google.com answers as an " +
-	"anonymous visitor and the session reaches one model only — paste the whole cookie header of the signed-in " +
-	"tab (__Secure-1PSID, SAPISID and __Secure-1PSIDTS)"
+//
+// The cookie that decides it is `__Secure-1PSIDTS`: it is the one the site
+// rotates every few minutes, and the one that carries a session into the
+// model registry. A header without it answers as an anonymous visitor.
+const geminiWebUnsignedCookieAdvice = "this cookie carries no __Secure-1PSIDTS, so gemini.google.com answers it " +
+	"as an anonymous visitor and the session reaches one model only — copy the whole cookie header of the " +
+	"signed-in tab, including __Secure-1PSIDTS"
 
 // geminiWebStaleCookieAdvice is the one wording for a cookie the site refuses.
 const geminiWebStaleCookieAdvice = "gemini.google.com refused this cookie — re-copy the whole cookie header " +

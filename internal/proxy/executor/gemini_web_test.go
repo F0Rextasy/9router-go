@@ -663,16 +663,16 @@ func TestGeminiWebRefusalNamesTheCredentialThatWasTried(t *testing.T) {
 			unwanted: "SAPISID",
 		},
 		{
-			name:     "a credential that cannot be signed",
+			name:     "a credential without the session timestamp",
 			apiKey:   "__Secure-1PSID=stale-cookie-value",
-			cause:    "SAPISID",
+			cause:    "__Secure-1PSIDTS",
 			unwanted: "An anonymous session",
 		},
 		{
-			name:     "a signed credential",
-			apiKey:   "__Secure-1PSID=psid-value; SAPISID=sapisid-value",
+			name:     "a complete credential",
+			apiKey:   "__Secure-1PSID=psid-value; __Secure-1PSIDTS=sidts-value",
 			cause:    "reaches this one model only",
-			unwanted: "SAPISID",
+			unwanted: "__Secure-1PSIDTS",
 		},
 	}
 

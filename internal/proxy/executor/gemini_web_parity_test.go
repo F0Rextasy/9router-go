@@ -496,20 +496,23 @@ func TestGeminiWebDoesNotCarryTheSessionToTheSiteItself(t *testing.T) {
 	}
 }
 
-// TestGeminiWebReportsAnUnsignedCredential pins the advice a caller gets when
-// the session reaches one model although a cookie is configured.
+// TestGeminiWebReportsACookieWithoutTheSessionTimestamp pins the advice a
+// caller gets when the session reaches one model although a cookie is
+// configured.
 //
-// The cause is not a stale cookie: a credential without SAPISID cannot be
-// signed, and an unsigned registry call is answered as a visitor's. Telling
-// the caller to re-copy the cookie sends them round the loop.
-func TestGeminiWebReportsAnUnsignedCredential(t *testing.T) {
+// The cause is not a stale cookie: it is the missing __Secure-1PSIDTS, the
+// cookie that carries the session into the model registry. Measured live
+// against gemini.google.com on 2026-10-21, a header of __Secure-1PSID alone
+// was served Flash-Lite only, and the same header with __Secure-1PSIDTS
+// added was served the account's four models.
+func TestGeminiWebReportsACookieWithoutTheSessionTimestamp(t *testing.T) {
 	advice := geminiWebOnlyModelAdvice("__Secure-1PSID=psid-value")
-	if !strings.Contains(advice, "SAPISID") {
+	if !strings.Contains(advice, "__Secure-1PSIDTS") {
 		t.Errorf("advice = %q, want it to name the missing cookie", advice)
 	}
-	signed := geminiWebOnlyModelAdvice("__Secure-1PSID=psid-value; SAPISID=sapisid-value")
-	if strings.Contains(signed, "SAPISID") {
-		t.Errorf("advice = %q, must not blame a missing SAPISID on a signed credential", signed)
+	complete := geminiWebOnlyModelAdvice("__Secure-1PSID=psid-value; __Secure-1PSIDTS=sidts-value")
+	if strings.Contains(complete, "__Secure-1PSIDTS") {
+		t.Errorf("advice = %q, must not blame a missing cookie on a complete credential", complete)
 	}
 	anonymous := geminiWebOnlyModelAdvice("")
 	if !strings.Contains(anonymous, "anonymous") {

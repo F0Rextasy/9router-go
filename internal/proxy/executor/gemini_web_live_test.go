@@ -1,12 +1,18 @@
 package executor
 
 import (
+	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
+	"hash/crc32"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+
+	json "encoding/json/v2"
 
 	"9router/proxy/internal/providers"
 )
@@ -58,17 +64,18 @@ func requireLiveUpstream(t *testing.T) {
 
 // requireLiveCookie returns the signed-in credential the live tests use.
 //
-// A credential without SAPISID is refused rather than used: the site answers
-// it as an anonymous visitor, so a run that passed would prove nothing about a
-// signed-in session.
+// A credential without __Secure-1PSIDTS is refused rather than used: that
+// cookie is what carries the session into the model registry, so a header
+// without it is answered as an anonymous visitor's and a run that passed
+// would prove nothing about a signed-in session.
 func requireLiveCookie(t *testing.T) string {
 	t.Helper()
 	cookie := strings.TrimSpace(os.Getenv(liveCookieEnv))
 	if cookie == "" {
 		t.Skipf("live upstream test: set %s to a signed-in cookie header", liveCookieEnv)
 	}
-	if !GeminiWebHasSAPISID(cookie) {
-		t.Fatalf("the credential carries no SAPISID, so gemini.google.com answers it as an anonymous visitor")
+	if !GeminiWebHasSessionTimestamp(cookie) {
+		t.Fatalf("the credential carries no __Secure-1PSIDTS, so gemini.google.com answers it as an anonymous visitor")
 	}
 	return cookie
 }
@@ -129,34 +136,28 @@ func TestGeminiWebLiveSignedInTurn(t *testing.T) {
 //
 // The image is the part that needed the session cookie: the upload goes to
 // Google's content-push service on another host, and without the cookie the
-// upload belongs to no session. A turn that answers about the picture proves
-// the upload was attached to the session and resolved by the site.
+// upload belongs to no session. The picture is a solid red square and the
+// answer has to name the colour, so a turn that never saw the picture cannot
+// pass — an answer about the colour is the proof that the attachment was
+// resolved and handed to the model.
 func TestGeminiWebLiveSignedInTurnWithAnImage(t *testing.T) {
 	requireLiveUpstream(t)
 	cookie := requireLiveCookie(t)
 
-	// A 1x1 PNG, so the test needs no file and no network of its own.
-	png := base64.StdEncoding.EncodeToString([]byte{
-		0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a,
-		0x00, 0x00, 0x00, 0x0d, 'I', 'H', 'D', 'R',
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89,
-		0x00, 0x00, 0x00, 0x0d, 'I', 'D', 'A', 'T',
-		0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00,
-		0x18, 0xdd, 0x8d, 0xb0,
-		0x00, 0x00, 0x00, 0x00, 'I', 'E', 'N', 'D', 0xae, 0x42, 0x60, 0x82,
-	})
+	// A 32x32 solid red PNG, so the test needs no file and no network of its
+	// own. The pixels are one colour so the answer is not a matter of taste.
+	png := solidPNGBase64(32, 32, 0xff, 0x00, 0x00)
 
 	rec := httptest.NewRecorder()
 	err := ForwardGeminiWeb(rec, &Request{
 		Ctx:    context.Background(),
 		Config: &providers.ProviderConfig{},
 		APIKey: cookie,
-		Body: geminiWebTestBody(t, "gemini-3.1-flash-lite", "Answer with one word: what colour is this image?", map[string]any{
+		Body: geminiWebTestBody(t, "gemini-3.1-flash-lite", "", map[string]any{
 			"messages": []map[string]any{{
 				"role": "user",
 				"content": []map[string]any{
-					{"type": "text", "text": "Answer with one word: what colour is this image?"},
+					{"type": "text", "text": "What colour fills this image? Answer with one word."},
 					{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64," + png}},
 				},
 			}},
@@ -170,7 +171,81 @@ func TestGeminiWebLiveSignedInTurnWithAnImage(t *testing.T) {
 		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "\"content\"") {
-		t.Errorf("the stream carries no content:\n%s", body)
+	answer := geminiWebAnswerText(body)
+	if answer == "" {
+		t.Fatalf("the stream carries no answer:\n%s", body)
 	}
+	t.Logf("the answer: %s", answer)
+	if !strings.Contains(strings.ToLower(answer), "red") {
+		t.Errorf("the answer = %q, want it to name the colour of the picture", answer)
+	}
+}
+
+// geminiWebAnswerText reads the answer out of a streamed chat completion.
+func geminiWebAnswerText(body string) string {
+	var out strings.Builder
+	for line := range strings.Lines(body) {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(trimmed, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		var chunk streamedChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		for _, choice := range chunk.Choices {
+			if text, ok := choice.Delta["content"].(string); ok {
+				out.WriteString(text)
+			}
+		}
+	}
+	return strings.TrimSpace(out.String())
+}
+
+// solidPNGBase64 renders a solid-colour PNG.
+func solidPNGBase64(width, height int, r, g, b byte) string {
+	var raw bytes.Buffer
+	for range height {
+		raw.WriteByte(0) // filter: none
+		for range width {
+			raw.Write([]byte{r, g, b})
+		}
+	}
+	var out bytes.Buffer
+	out.Write([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a})
+	chunk := func(kind string, payload []byte) {
+		var length bytes.Buffer
+		_ = binary.Write(&length, binary.BigEndian, uint32(len(payload)))
+		out.Write(length.Bytes())
+		body := append([]byte(kind), payload...)
+		sum := crc32.ChecksumIEEE(body)
+		var checksum bytes.Buffer
+		_ = binary.Write(&checksum, binary.BigEndian, sum)
+		out.Write(body)
+		out.Write(checksum.Bytes())
+	}
+	var header bytes.Buffer
+	_ = binary.Write(&header, binary.BigEndian, uint32(width))
+	_ = binary.Write(&header, binary.BigEndian, uint32(height))
+	header.Write([]byte{8, 2, 0, 0, 0}) // 8-bit, truecolour
+	chunk("IHDR", header.Bytes())
+	chunk("IDAT", compress(raw.Bytes()))
+	chunk("IEND", nil)
+	return base64.StdEncoding.EncodeToString(out.Bytes())
+}
+
+// compress deflates the PNG's pixel data.
+func compress(data []byte) []byte {
+	var out bytes.Buffer
+	writer, err := zlib.NewWriterLevel(&out, zlib.BestSpeed)
+	if err != nil {
+		return data
+	}
+	_, _ = writer.Write(data)
+	_ = writer.Close()
+	return out.Bytes()
 }

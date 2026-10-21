@@ -78,7 +78,7 @@
       ? providerId === 'grok-web'
         ? 'sso=xxxxx... or just the raw value'
         : providerId === 'gemini-web'
-          ? '__Secure-1PSID=...; SAPISID=...; __Secure-1PSIDTS=...'
+          ? '__Secure-1PSID=...; __Secure-1PSIDTS=...'
           : 'eyJhbGciOi...'
       : isXaiApiKey
         ? 'xai-...'

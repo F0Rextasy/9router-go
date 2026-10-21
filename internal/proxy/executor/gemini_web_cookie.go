@@ -26,10 +26,10 @@ func GeminiWebUserAgent() string { return geminiWebUserAgent }
 // when the credential carries nothing to sign with.
 //
 // It is exported so the dashboard probe signs its registry call the same way
-// the executor does. A probe that asked for the model list without the
-// signature is answered as an anonymous visitor, so it cannot tell a signed-in
-// session from a dead one — it would report every working Pro account as
-// reaching one model.
+// the executor does. A signed call is the request a signed-in page makes, so
+// it is the one sent — but it is not what decides the served set: measured
+// live on 2026-10-21, the site answered the unsigned registry call with the
+// same model list.
 func GeminiWebAuthorization(cookie string) string {
 	return geminiWebSAPISIDHash(cookie, geminiWebOrigin)
 }
@@ -37,12 +37,24 @@ func GeminiWebAuthorization(cookie string) string {
 // GeminiWebHasSAPISID reports whether a credential carries the cookie the
 // signed-in calls are signed with.
 //
-// A bare `__Secure-1PSID` is enough to reach a page, and the page then issues
-// an anti-CSRF token, so such a credential looks like it works. It is not
-// enough to reach the model registry: that RPC is answered as an anonymous
-// visitor without a signature, and an anonymous visitor is served one model.
+// The signature is what a signed-in page sends, so a credential without it
+// is asked as a visitor would be. It is not, on its own, what decides which
+// models the session may be served — see GeminiWebHasSessionTimestamp.
 func GeminiWebHasSAPISID(cookie string) bool {
 	return geminiWebCookieValue(cookie, "SAPISID") != ""
+}
+
+// GeminiWebHasSessionTimestamp reports whether a credential carries the
+// session timestamp cookie.
+//
+// `__Secure-1PSIDTS` is the cookie that decides what a session may be
+// served, and it is the one the site rotates every few minutes. A header
+// without it is answered as an anonymous visitor's, however fresh the rest
+// of it is: measured live against gemini.google.com on 2026-10-21, a header
+// of `__Secure-1PSID` alone was served Flash-Lite only, and the same header
+// with `__Secure-1PSIDTS` added was served the account's four models.
+func GeminiWebHasSessionTimestamp(cookie string) bool {
+	return geminiWebCookieValue(cookie, "__Secure-1PSIDTS") != ""
 }
 
 // geminiWebPlaceholderKeys are the values the router substitutes for a provider
