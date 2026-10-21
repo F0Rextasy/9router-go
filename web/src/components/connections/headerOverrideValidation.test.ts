@@ -67,4 +67,35 @@ describe('headerValueError', () => {
     expect(headerValueError('a'.repeat(MAX_OVERRIDE_VALUE_LENGTH))).toBe('')
     expect(headerValueError('a'.repeat(MAX_OVERRIDE_VALUE_LENGTH + 1))).not.toBe('')
   })
+
+  // The cap is measured in UTF-8 bytes, the unit the server counts in
+  // (Go's `len(value)`). `value.length` counts UTF-16 code units, so a
+  // non-ASCII value is shorter in code units than in bytes — the check
+  // below would have accepted every one of these values, and the server
+  // would have answered 400.
+  test('measures a multi-byte value in UTF-8 bytes, not UTF-16 code units', () => {
+    // 5000 "é" = 5000 code units = 10000 bytes
+    expect('é'.repeat(5000).length).toBe(5000)
+    expect(headerValueError('é'.repeat(5000))).not.toBe('')
+
+    // 4096 "é" = 4096 code units = 8192 bytes — exactly at the cap
+    expect('é'.repeat(4096).length).toBe(4096)
+    expect(headerValueError('é'.repeat(4096))).toBe('')
+  })
+
+  test('measures an emoji value in UTF-8 bytes, not UTF-16 code units', () => {
+    // 2000 "😀" = 4000 UTF-16 code units = 8000 bytes
+    expect('😀'.repeat(2000).length).toBe(4000)
+    expect(headerValueError('😀'.repeat(2000))).toBe('')
+
+    // 3000 "😀" = 6000 UTF-16 code units = 12000 bytes
+    expect('😀'.repeat(3000).length).toBe(6000)
+    expect(headerValueError('😀'.repeat(3000))).not.toBe('')
+  })
+
+  test('the length message counts bytes', () => {
+    expect(headerValueError('a'.repeat(MAX_OVERRIDE_VALUE_LENGTH + 1))).toBe(
+      `Max ${MAX_OVERRIDE_VALUE_LENGTH} bytes.`,
+    )
+  })
 })
