@@ -328,6 +328,25 @@ For Claude Messages clients: `ANTHROPIC_BASE_URL=http://localhost:20130/v1`.
 | `PPROF_ENABLED` | `false` | Expose `/debug/pprof/*` (keep off on untrusted networks) |
 | `TRUST_PROXY` / `TRUST_CLOUDFLARE` | unset | Trust forwarded client-IP headers |
 | `TRUSTED_PROXIES` | unset | CIDR list of the reverse proxies whose forwarded client-IP headers are trusted |
+| `GEMINI_WEB_ROTATION` | `on` | Renew the Gemini Web session cookie in the background (see below) |
+
+#### Gemini Web session renewal
+
+The `gemini-web` provider reaches `gemini.google.com` with a session cookie,
+and Google rotates the session's timestamp cookie (`__Secure-1PSIDTS`) every
+few minutes. The router renews it in the background, so a signed-in account
+keeps reaching the models it pays for instead of falling back to one model
+after a few minutes.
+
+**Copy the cookie from an Incognito window that you close right after, not
+from a normal tab.** A browser that is still open keeps rotating the same
+session, and the browser and the router then renew it from two sides and
+cancel each other out — which signs the account out. A closed Incognito
+window is not rotating anything, so the router's renewal is the only one.
+
+Set `GEMINI_WEB_ROTATION=off` to run the router without renewing anything at
+all. That is the right choice when the credential belongs to a browser you
+want to keep using.
 
 `.env.example` documents the security-sensitive subset and OAuth overrides.
 

@@ -551,6 +551,31 @@
               </p>
             {/if}
 
+            {#if providerId === 'gemini-web'}
+              <!--
+                The warning is here rather than only in the catalog hint because
+                this is where the credential is pasted, and the mistake it warns
+                about is the one that signs the account out.
+              -->
+              <div class="rounded-[10px] border border-warning/40 bg-warning/10 p-3">
+                <p class="text-xs font-semibold text-text-main">Copy the cookies from a closed Incognito window</p>
+                <p class="text-xs text-text-muted mt-1">
+                  Google rotates <span class="font-mono">__Secure-1PSIDTS</span> every few minutes, and a browser
+                  that is still open keeps rotating the same session. If you copy the cookies from a normal tab,
+                  the browser and this router renew the same session from two sides and cancel each other out —
+                  which signs the account out. Open an Incognito window, sign in, copy the whole cookie header
+                  (DevTools → Application → Cookies, including
+                  <span class="font-mono">__Secure-1PSIDTS</span>), then close the Incognito window
+                  <span class="font-semibold">without signing out</span>. Nothing is rotating that session any
+                  more, so this router's renewal is the only one.
+                </p>
+                <p class="text-xs text-text-muted mt-2">
+                  To run the router without renewing anything at all, set
+                  <span class="font-mono">GEMINI_WEB_ROTATION=off</span> in the environment.
+                </p>
+              </div>
+            {/if}
+
             {#if providerRegions}
               <div>
                 <label for="connRegion" class={labelCls}>Region</label>

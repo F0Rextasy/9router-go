@@ -3,6 +3,8 @@ package executor
 import (
 	"context"
 	json "encoding/json/v2"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,7 +57,17 @@ var (
 // every Gemini Web connection.
 //
 // Safe to call more than once: the second call does nothing.
+//
+// The loop can be turned off with GEMINI_WEB_ROTATION=off. Turning it off is
+// the right choice when the credential belongs to a browser that is still
+// running: the browser rotates the same cookie, and the two rotations cancel
+// each other out. A credential copied from a closed Incognito window is the
+// right one for this loop, because nothing else is rotating it.
 func StartGeminiWebRotation(ctx context.Context, repo *db.Repo) {
+	if !geminiWebRotationEnabled() {
+		log.Info("gemini-web", "the session renewal is off", "setting", geminiWebRotationEnv)
+		return
+	}
 	geminiWebRotationMu.Lock()
 	if geminiWebRotationStarted {
 		geminiWebRotationMu.Unlock()
@@ -82,6 +94,24 @@ func StartGeminiWebRotation(ctx context.Context, repo *db.Repo) {
 			}
 		}
 	}()
+}
+
+// geminiWebRotationEnv is the setting that turns the renewal off.
+const geminiWebRotationEnv = "GEMINI_WEB_ROTATION"
+
+// geminiWebRotationEnabled reports whether the renewal runs.
+//
+// Only an explicit "off" turns it off. Anything else — including an unset
+// variable — leaves it on, because a credential that is never renewed falls
+// back to one model within minutes, which is the failure the loop exists to
+// prevent.
+func geminiWebRotationEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(geminiWebRotationEnv))) {
+	case "off", "0", "false", "no", "disabled":
+		return false
+	default:
+		return true
+	}
 }
 
 // geminiWebRotationTick renews every Gemini Web connection that is due.

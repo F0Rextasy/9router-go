@@ -27,6 +27,13 @@ was uploaded anonymously, and its session cookie was never renewed.
   a grace on top because the site answers a second call within the same
   minute with HTTP 429. A connection with no credential, or one whose
   credential carries no session timestamp, is left alone.
+
+  The renewal and a browser that is still open do not get along: Google
+  rotates the same session from both sides, and the two cancel each other
+  out, which signs the account out. The credential therefore has to be copied
+  from an Incognito window that is closed right after, and the dashboard says
+  so where the credential is pasted. The renewal can also be turned off
+  entirely with `GEMINI_WEB_ROTATION=off`.
 - **A sealed credential was invisible to the connection list.** The
   single-row readers open the sealed columns before they hand a row back, but
   the list query did not, so every caller that read the credential from a

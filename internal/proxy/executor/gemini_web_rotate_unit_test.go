@@ -203,3 +203,37 @@ func TestGeminiWebRefusedRenewalIsNotARenewal(t *testing.T) {
 		t.Error("a deleted timestamp was not counted as a change")
 	}
 }
+
+// TestGeminiWebRotationOptOut pins the switch.
+//
+// A credential that belongs to a browser that is still running has to be left
+// alone: the browser rotates the same cookie, and the two rotations cancel
+// each other out. Only an explicit "off" turns the loop off, because a
+// credential that is never renewed falls back to one model within minutes.
+func TestGeminiWebRotationOptOut(t *testing.T) {
+	tests := []struct {
+		value string
+		want  bool
+	}{
+		{value: "", want: true},
+		{value: "off", want: false},
+		{value: "OFF", want: false},
+		{value: " off ", want: false},
+		{value: "0", want: false},
+		{value: "false", want: false},
+		{value: "no", want: false},
+		{value: "disabled", want: false},
+		{value: "on", want: true},
+		{value: "1", want: true},
+		{value: "true", want: true},
+	}
+	for _, tt := range tests {
+		t.Run("value="+tt.value, func(t *testing.T) {
+			t.Setenv(geminiWebRotationEnv, tt.value)
+			if got := geminiWebRotationEnabled(); got != tt.want {
+				t.Errorf("geminiWebRotationEnabled() with %s=%q = %v, want %v",
+					geminiWebRotationEnv, tt.value, got, tt.want)
+			}
+		})
+	}
+}
