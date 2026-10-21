@@ -119,17 +119,31 @@ export function precompress(distRootPath: string = distRoot): void {
     // the extra bytes would live in the binary forever. A file that does not
     // compress — already-compressed content behind a compressible extension,
     // or a short random blob — hits this.
-    if (br.length >= raw.length && gz.length >= raw.length) {
+    //
+    // The comparison is per variant, not per file. The two encoders do not
+    // agree on which is smaller for every input: brotli's window is 4 MiB and
+    // gzip's is 32 KiB, so a file whose redundancy sits farther apart than
+    // 32 KiB compresses under brotli and not under gzip. A file-level
+    // "both are too big" test would write that file's too-large gzip variant
+    // anyway, and a client that accepts gzip would download more than the
+    // identity body. So each variant is written only when it is smaller.
+    const brSmaller = br.length < raw.length
+    const gzSmaller = gz.length < raw.length
+    if (!brSmaller && !gzSmaller) {
       console.log(`  skipped ${file.slice(distRootPath.length + 1)} — the compressed variant is not smaller`)
       continue
     }
 
-    writeFileSync(`${file}.br`, br)
-    writeFileSync(`${file}.gz`, gz)
+    if (brSmaller) {
+      writeFileSync(`${file}.br`, br)
+      brTotal += br.length
+    }
+    if (gzSmaller) {
+      writeFileSync(`${file}.gz`, gz)
+      gzTotal += gz.length
+    }
 
     rawTotal += raw.length
-    brTotal += br.length
-    gzTotal += gz.length
   }
 
   if (rawTotal === 0) return

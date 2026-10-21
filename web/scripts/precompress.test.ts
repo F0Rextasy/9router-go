@@ -85,6 +85,30 @@ describe('precompress', () => {
     }
   })
 
+  it('never writes a variant that is larger, when only one encoder is larger', () => {
+    const root = scaffold()
+    // gzip's window is 32 KiB and brotli's is 4 MiB, so a file whose
+    // redundancy sits farther apart than 32 KiB compresses under brotli and
+    // NOT under gzip. The per-file test above cannot produce this case: its
+    // fixture is either compressible by both or by neither, so the two
+    // encoders always agree on the direction. Here they disagree, and the
+    // gzip variant is the one that grew.
+    const period = 100 * 1024
+    const pat = randomBytes(period)
+    const reps = Math.ceil((2 * 1024 * 1024) / period)
+    writeFileSync(join(root, 'assets', 'blob.js'), Buffer.concat(Array.from({ length: reps }, () => pat)))
+
+    precompress(root)
+
+    const original = readFileSync(join(root, 'assets', 'blob.js')).length
+    for (const ext of ['.br', '.gz']) {
+      const variantPath = join(root, 'assets', 'blob.js' + ext)
+      if (!existsSync(variantPath)) continue
+      const variant = readFileSync(variantPath).length
+      expect(variant).toBeLessThan(original)
+    }
+  })
+
   it('leaves a file that is already compressed alone', () => {
     const root = scaffold()
     // A woff2 is not in the compressible list: it is already deflate-based,
