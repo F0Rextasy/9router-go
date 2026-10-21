@@ -46,6 +46,8 @@ func TestIsProtectedToolVocabulary(t *testing.T) {
 		{name: "unrelated some_other_tool", tool: "some_other_tool", want: false},
 		{name: "unrelated shell", tool: "shell", want: false},
 		{name: "unrelated terminal", tool: "terminal", want: false},
+		{name: "unrelated sh", tool: "sh", want: false},
+		{name: "unrelated python", tool: "python", want: false},
 		{name: "empty name", tool: "", want: false},
 	}
 
