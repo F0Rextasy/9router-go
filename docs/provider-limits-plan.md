@@ -192,7 +192,7 @@ CREATE TABLE IF NOT EXISTS providerLedgerCarryover (
 
 **Jebakan ini sudah dikerjakan di PR 1.** Pass prune (`usage_retention_ledger.go`) sekarang menulis dua dimensi carryover: `usageLedgerCarryover` per `keyId` (baris 525-533) dan `providerLedgerCarryover` per `providerId` (baris 534-542), difold dari chunk yang sama terhadap mark masing-masing (`foldProviders`, baris 433-457). Buktinya `TestPruneUsageHistory_ProviderSpendInvariant` (pemakaian node identik sebelum dan sesudah prune) dan `TestPruneUsageHistory_ProviderResetIsNotReBanked` (reset tidak di-charge dua kali). Tanpa keduanya, kuota provider **diam-diam kurang-hitung** setelah prune pertama: node tampak masih punya sisa kuota padahal sudah habis.
 
-Indeks: `usageHistory` sudah punya `idx_uh_provider` (`schema.go:149`) — cukup untuk `WHERE provider = ? AND id > ?`. Tidak ada indeks baru.
+Indeks: `usageHistory` punya `idx_uh_prov_tok` (`schema.go`) — `(provider, id, promptTokens, completionTokens)`. Kombinasi ini yang cukup untuk `WHERE provider = ? AND id > ?` **dan** membuat jumlahnya covering: SQLite menjumlahkan dari index tanpa kembali ke tabel per baris. Versi sebelumnya (`idx_uh_provider`, hanya kolom `provider`) menjawab equality-nya tetapi jumlah token tetap diambil dari tabel satu baris demi satu baris — dan daftar node dashboard membayar itu sekali per node per poll.
 
 ---
 
