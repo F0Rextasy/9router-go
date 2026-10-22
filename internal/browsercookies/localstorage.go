@@ -139,11 +139,20 @@ func readJSONString(data []byte) (string, bool) {
 			return string(window[start : start+end]), true
 		}
 	}
-	// The bare form: "…".
-	if bare := bytes.Index(window, []byte(`"`)); bare >= 0 {
-		start := bare + 1
-		if end := bytes.Index(window[start:], []byte(`"`)); end >= 0 {
-			return string(window[start : start+end]), true
+	// The object form with no credential in it: {"value":null,…}. A page
+	// that is not signed in holds this, so it must read as "no
+	// credential" rather than fall through to the bare form below.
+	if bytes.Contains(window, []byte(`{"value":null`)) {
+		return "", false
+	}
+	// The bare form: "…". It is only the bare form when the value starts
+	// with a quote. Otherwise the first quote in the window belongs to
+	// some other key, and reading from there would return a key name
+	// instead of a credential.
+	trimmed := bytes.TrimLeft(window, " 	\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		if end := bytes.Index(trimmed[1:], []byte(`"`)); end >= 0 {
+			return string(trimmed[1 : 1+end]), true
 		}
 	}
 	return "", false
@@ -152,7 +161,17 @@ func readJSONString(data []byte) (string, bool) {
 // ProfileFromCookieDB is the profile directory a cookie database belongs to.
 //
 // Chromium keeps the cookie database and the localStorage database in the
-// same profile directory, so a caller that has found one has found the other.
+// same profile directory, so a caller that has found one has found the
+// other. The cookie database does not sit at the profile root, though:
+// current Chrome puts it in the profile's Network/ subdirectory, while
+// localStorage lives in Local Storage/leveldb beside it. So the Network
+// segment is dropped the way DetectProfileLock drops it — otherwise the
+// derived directory is the wrong one and the localStorage read finds
+// nothing on any current Chrome.
 func ProfileFromCookieDB(cookieDBPath string) string {
-	return filepath.Dir(cookieDBPath)
+	dir := filepath.Dir(cookieDBPath)
+	if strings.EqualFold(filepath.Base(dir), "Network") {
+		dir = filepath.Dir(dir)
+	}
+	return dir
 }

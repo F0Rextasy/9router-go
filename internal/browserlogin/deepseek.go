@@ -241,16 +241,17 @@ func readDeepSeekCookies(ctx context.Context, webSocketURL string) (string, bool
 // there, the credential in it is not. Both shapes are read, because the
 // bare-string shape is what a value copied out of DevTools looks like.
 func readDeepSeekUserToken(ctx context.Context, webSocketURL string) (string, bool) {
-	// The expression is built as JSON rather than pasted into a string, so
-	// a value that needs escaping cannot break the request.
-	expression, err := json.Marshal(`localStorage.getItem("userToken")`)
-	if err != nil {
-		return "", false
-	}
+	// The expression is JS SOURCE, not a JSON value: Runtime.evaluate
+	// evaluates what it is given as JavaScript. Marshalling it first would
+	// send Chrome a JSON string literal, which it evaluates to the source
+	// text itself rather than to the token. The payload below is marshalled
+	// as a whole, so a value that needs escaping still cannot break the
+	// request.
+	expression := `localStorage.getItem("userToken")`
 	payload, err := json.Marshal(map[string]any{
 		"id":     2,
 		"method": "Runtime.evaluate",
-		"params": map[string]any{"expression": string(expression), "returnByValue": true},
+		"params": map[string]any{"expression": expression, "returnByValue": true},
 	})
 	if err != nil {
 		return "", false
