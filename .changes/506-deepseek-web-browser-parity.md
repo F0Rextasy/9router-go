@@ -70,12 +70,27 @@ based on a capture of the live client rather than on inference.
   deletes the profile on the way out. The dashboard's connection form has the
   button. Refreshing the credential is now a button instead of a DevTools
   ritual.
+- **The credential is renewed on the connection, not just produced.** The
+  sign-in above answers with a credential for the operator to paste.
+  `POST /api/connections/{id}/renew-deepseek` writes it to the row instead:
+  the browser opens, the operator signs in, and the row's `apiKey` and
+  `deepSeekCookie` are replaced with what the browser produced. The rest of
+  the row is left alone, so a rename or a priority change made while the
+  browser was open is not reverted. The dashboard's per-connection Actions
+  menu has the button.
 
 Verified against the live site on 2026-10-22: a whole turn ran end to end
 with the credential read out of a signed-in profile — the token exchange, the
 session, the proof of work and the streamed completion all succeeded — and
 the WAF was measured on the document path: with the site's own cookie it
 answers HTTP 200 with the app, and without one it answers HTTP 202 with
-`x-amzn-waf-action: challenge` and the challenge script. The header set, the
-order and the error codes come from a netlog capture of the live client
-rather than from memory.
+`x-amzn-waf-action: challenge` and the challenge script.
+
+The WAF's token is not renewable by a client, and that is measured rather
+than assumed: a document load that presents a valid cookie is answered with
+HTTP 200 and NO `Set-Cookie` at all, across three consecutive loads. The
+site re-issues that token only to a browser that solved its challenge,
+which is why the renewal drives a browser rather than running on a timer.
+
+The header set, the order and the error codes come from a netlog capture of
+the live client rather than from memory.

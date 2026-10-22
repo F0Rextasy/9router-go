@@ -1179,6 +1179,15 @@ export const api = {
       body: JSON.stringify({ profile: profile ?? '' }),
     }),
   /**
+   * Renew one DeepSeek Web connection's credential.
+   *
+   * A browser opens and waits for the sign-in, so this call takes as long as
+   * the operator takes to sign in. The credential that comes back is written
+   * to the row, so there is nothing to paste.
+   */
+  renewDeepSeekCredential: async (id: string): Promise<{ renewed: boolean }> =>
+    request<{ renewed: boolean }>(`/api/connections/${id}/renew-deepseek`, { method: 'POST' }),
+  /**
    * Read a session out of a browser that is already signed in, and answer with
    * the cookie header to paste. The warning says what to do about a browser
    * that is still running.

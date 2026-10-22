@@ -562,6 +562,12 @@
   let isFreebuff = $derived(
     providerId === 'freebuff' || storageAlias === 'fb' || storageAlias === 'freebuff'
   )
+  // DeepSeek's credential is renewed by a browser, not by the client: the
+  // site's userToken is only issued by a real sign-in, and the WAF's cookie
+  // is only renewed by the browser that solves its challenge. So the renewal
+  // opens a browser and waits for a human.
+  let isDeepSeekWeb = $derived(providerId === 'deepseek-web')
+  let renewingConnId = $state<string | null>(null)
   // The session API has to be asked about an account that can actually serve.
   // Connections are ordered by priority, and a disabled one can sort first —
   // its rejected credential reports `banned`/`unauthorized` and blanks the
@@ -1106,6 +1112,27 @@
       oneByOneStatuses = { ...oneByOneStatuses, [conn.id]: probeOutcomeFromError(err) }
     } finally {
       onRefresh()
+    }
+  }
+
+  /**
+   * Renew one DeepSeek Web connection's credential.
+   *
+   * A browser opens and waits for the sign-in, so the operator has to be
+   * there for it. The credential that comes back is written to the row, so
+   * there is nothing to paste.
+   */
+  async function renewDeepSeekCredential(conn: ProviderConnection) {
+    if (renewingConnId) return
+    renewingConnId = conn.id
+    try {
+      await api.renewDeepSeekCredential(conn.id)
+      alert('The credential was renewed.')
+      onRefresh()
+    } catch (err) {
+      alert(`The renewal failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      renewingConnId = null
     }
   }
 
@@ -3566,6 +3593,14 @@
                         disabled={isTestingOneByOne || status?.state === 'testing'}
                         onSelect={() => refreshOneConnection(conn)}
                       />
+                      {#if isDeepSeekWeb}
+                        <MenuItem
+                          label="Renew credential"
+                          icon="lock_reset"
+                          disabled={renewingConnId === conn.id}
+                          onSelect={() => renewDeepSeekCredential(conn)}
+                        />
+                      {/if}
                       <MenuItem label="Edit" icon="edit" onSelect={() => openEditConnection(conn)} />
 
                       <div class="my-1 border-t border-border-subtle" role="separator"></div>

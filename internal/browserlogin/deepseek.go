@@ -234,46 +234,76 @@ func readDeepSeekCookies(ctx context.Context, webSocketURL string) (string, bool
 // The value is read from the page the browser is on, so the page has to be
 // on the site — a sign-in redirects there, and the read is retried until it
 // answers.
+//
+// The site stores the token as a JSON OBJECT, not as a bare string: the
+// value in localStorage is `{"value":"…","__version":"0"}`. A page that is
+// not signed in holds `{"value":null,"__version":"0"}` — the object is
+// there, the credential in it is not. Both shapes are read, because the
+// bare-string shape is what a value copied out of DevTools looks like.
 func readDeepSeekUserToken(ctx context.Context, webSocketURL string) (string, bool) {
-	const expression = `localStorage.getItem("userToken")`
-
-	reply, err := cdpCall(ctx, webSocketURL, `{"id":2,"method":"Runtime.evaluate","params":{"expression":`+
-		`"`+expression+`","returnByValue":true}}`)
+	// The expression is built as JSON rather than pasted into a string, so
+	// a value that needs escaping cannot break the request.
+	expression, err := json.Marshal(`localStorage.getItem("userToken")`)
+	if err != nil {
+		return "", false
+	}
+	payload, err := json.Marshal(map[string]any{
+		"id":     2,
+		"method": "Runtime.evaluate",
+		"params": map[string]any{"expression": string(expression), "returnByValue": true},
+	})
+	if err != nil {
+		return "", false
+	}
+	reply, err := cdpCall(ctx, webSocketURL, string(payload))
 	if err != nil {
 		return "", false
 	}
 	// cdpCall already unwraps the protocol's own `result` envelope, so what
 	// comes back is the evaluation's own result: `{"type":…,"value":…}`.
-	var payload struct {
+	var evaluated struct {
 		Value json.RawMessage `json:"value"`
 	}
-	if err := json.Unmarshal(reply, &payload); err != nil {
+	if err := json.Unmarshal(reply, &evaluated); err != nil {
 		return "", false
 	}
-	if len(payload.Value) == 0 {
+	if len(evaluated.Value) == 0 {
 		return "", false
 	}
-	var value string
-	if err := json.Unmarshal(payload.Value, &value); err != nil {
+	token := DeepSeekUserTokenFromLocalStorage(string(evaluated.Value))
+	if token == "" {
+		// The page is on the site but holds no credential: it is an
+		// anonymous page, and an anonymous page is not a sign-in.
 		return "", false
 	}
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", false
-	}
-	return value, true
+	return token, true
 }
 
-// DeepSeekUserTokenFromLocalStorage normalizes a pasted credential.
+// DeepSeekUserTokenFromLocalStorage normalizes a stored credential.
 //
-// The site stores the token as a bare string, but a value copied out of
-// DevTools is sometimes copied as the JSON-encoded form. Both spellings are
-// accepted here, because the difference is a detail of how the operator
-// copied it and not a difference of credential.
+// The site stores the token as a JSON object — `{"value":"…","__version":"0"}`
+// — and a value that carries a null in it is a page that is not signed in.
+// A value copied out of DevTools is sometimes copied as the JSON-encoded
+// string instead. Every spelling is accepted here, because the difference
+// is a detail of how the value was read and not a difference of credential.
 func DeepSeekUserTokenFromLocalStorage(raw string) string {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return ""
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var stored struct {
+			Value *string `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(trimmed), &stored); err != nil {
+			return ""
+		}
+		// A stored null is the site saying "no credential here", which is
+		// what an unsigned-in page holds.
+		if stored.Value == nil {
+			return ""
+		}
+		return strings.TrimSpace(*stored.Value)
 	}
 	if !strings.HasPrefix(trimmed, "\"") {
 		return trimmed
