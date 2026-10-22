@@ -147,6 +147,12 @@ func (r *Repo) ProviderTokenUsage(ctx context.Context, nodeID string) (int, erro
 // node, keyed by node id. The dashboard lists every node with its policy and
 // usage, so a read per node there would be N+1 on a page load.
 //
+// The map holds one entry per node and nothing else. The statement it
+// replaced aggregated the whole ledger by provider, so it also returned an
+// entry for every registry provider that had spent anything — entries no
+// caller of this function ever read, because the caller looks a node's spend
+// up by the node's own id.
+//
 // The statement walks providerNodes and reads each node's spend through a
 // correlated seek rather than aggregating the whole ledger. The aggregate
 // version grouped every ledger row by provider, which on a 400k-row ledger

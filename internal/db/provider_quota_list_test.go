@@ -54,9 +54,16 @@ func TestProviderTokenUsageByNode_SeeksTheProviderIndex(t *testing.T) {
 	}
 }
 
+// TestProviderTokenUsageByNode_DoesNotScanTheLedger proves the statement is
 // driven by providerNodes, not by the ledger. A scan of usageHistory here is
 // the regression: it is what made the node list cost a second on a 400k-row
 // ledger and grow with every request the gateway served.
+//
+// The guard matches on the ledger's ALIAS, not on the table name: both this
+// statement and the aggregate one it replaced read the ledger as "h", and
+// SQLite's plan rows name the alias ("SCAN h USING COVERING INDEX ..."), so
+// a guard written against the table name never fires against the very query
+// it is meant to catch.
 func TestProviderTokenUsageByNode_DoesNotScanTheLedger(t *testing.T) {
 	repo := openEphemeralSchemaDB(t)
 	database := repo.RawDB()
@@ -64,7 +71,7 @@ func TestProviderTokenUsageByNode_DoesNotScanTheLedger(t *testing.T) {
 	plan := explainQueryPlan(t, database, providerTokenUsageByNodeQuery)
 
 	for _, detail := range plan {
-		if strings.Contains(detail, "SCAN usageHistory") {
+		if strings.Contains(detail, "SCAN h") || strings.Contains(detail, "SCAN usageHistory") {
 			t.Errorf("the node list scans the whole ledger: %q", detail)
 		}
 	}
@@ -262,26 +269,90 @@ func TestProviderTokenUsageByNode_PrefersTheCoveringIndex(t *testing.T) {
 
 // TestProviderTokenUsageByNode_ScalesWithNodesNotLedger proves the list does
 // not read the ledger's other providers. A ledger full of rows for providers
-// that are not custom nodes must not change what the node list costs, so the
-// test compares the plan the statement runs over a populated ledger with the
-// plan it runs over an empty one.
+// that are not custom nodes must not change what the node list costs.
+//
+// The cost is measured, not inferred from the plan: a plan is the same
+// whether the ledger holds ten rows or a million, so comparing plan rows
+// says nothing about what the statement costs. The registry rows are what
+// the old statement scanned and what this one must not, so the registry
+// ledger is what grows here; the node rows stay fixed.
+//
+// The bound is a comparison against the same read over the same corpus
+// without the registry rows, which is the shape a scan would break: a
+// scanned ledger costs in proportion to the rows it visits, so the ratio
+// between the two reads is what the assertion is on. The allowance is
+// generous because this runs on a shared machine, but it is far below the
+// two orders of magnitude a scan produces.
 func TestProviderTokenUsageByNode_ScalesWithNodesNotLedger(t *testing.T) {
 	repo := openEphemeralSchemaDB(t)
-	database := repo.RawDB()
+	ctx := context.Background()
 
 	seedProviderNode(t, repo, "node-nara", "Nara AI")
-	empty := explainQueryPlan(t, database, providerTokenUsageByNodeQuery)
 
-	for i := range 200 {
-		seedProviderLedgerRow(t, repo, 0, "openai", 100, 50, time.Now())
-		_ = i
-	}
-	populated := explainQueryPlan(t, database, providerTokenUsageByNodeQuery)
+	// The node's own rows: the read must return exactly these.
+	const ownRows = 200
+	seedProviderLedgerRows(t, repo, "node-nara", ownRows)
 
-	if len(empty) != len(populated) {
-		t.Errorf("the plan changed once the ledger filled: %d rows before, %d after\nbefore:\n%s\nafter:\n%s",
-			len(empty), len(populated), strings.Join(empty, "\n"), strings.Join(populated, "\n"))
+	timeOwn := timeProviderTokenUsageByNode(t, repo, ctx)
+
+	// Now fill the ledger with rows belonging to providers that are not
+	// custom nodes — the traffic the old statement aggregated.
+	const registryRows = 60000
+	seedProviderLedgerRows(t, repo, "openai", registryRows)
+
+	timeRegistry := timeProviderTokenUsageByNode(t, repo, ctx)
+
+	t.Logf("node rows=%d registry rows=%d: own-only=%v with-registry=%v",
+		ownRows, registryRows, timeOwn, timeRegistry)
+
+	// The node's own spend must still be right: the registry rows belong
+	// to no node and must not be counted into it.
+	usage, err := repo.ProviderTokenUsageByNode(ctx)
+	if err != nil {
+		t.Fatalf("ProviderTokenUsageByNode: %v", err)
 	}
+	if got, want := usage["node-nara"], ownRows*150; got != want {
+		t.Errorf("node-nara spend = %d, want %d", got, want)
+	}
+
+	// A scanned ledger makes the read grow with the rows it visits. The
+	// floor keeps a sub-millisecond baseline from dividing into noise, and
+	// the factor is far below what a scan produces (measured: about 12x
+	// for the old statement over this corpus, and two orders of magnitude
+	// over a real ledger).
+	limit := timeOwn*4 + 20*time.Millisecond
+	if timeRegistry > limit {
+		t.Errorf("the node list got slower when the registry ledger grew: %v over %d registry rows, limit %v",
+			timeRegistry, registryRows, limit)
+	}
+}
+
+// seedProviderLedgerRows inserts n ledger rows for one provider in one
+// statement. The rows are inserted in a loop elsewhere, which is fine for a
+// handful and far too slow for the tens of thousands this test needs.
+func seedProviderLedgerRows(t *testing.T, repo *Repo, provider string, n int) {
+	t.Helper()
+	ts := time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+	if _, err := repo.RawDB().Exec(
+		`WITH RECURSIVE seq(x) AS (
+		     SELECT 1 UNION ALL SELECT x + 1 FROM seq WHERE x < ?
+		 )
+		 INSERT INTO usageHistory (timestamp, provider, model, connectionId, apiKey, clientKey, endpoint, promptTokens, completionTokens, cost, status, tokens, meta)
+		 SELECT ?, ?, 'glm-5.3', 'conn-1', 'upstream-cred', 'unrelated-client', '/v1/chat/completions', 100, 50, 0.01, 'success', '{}', ''
+		   FROM seq`,
+		n, ts, provider); err != nil {
+		t.Fatalf("seed %d usageHistory rows for %s: %v", n, provider, err)
+	}
+}
+
+// timeProviderTokenUsageByNode runs the read and returns how long it took.
+func timeProviderTokenUsageByNode(t *testing.T, repo *Repo, ctx context.Context) time.Duration {
+	t.Helper()
+	start := time.Now()
+	if _, err := repo.ProviderTokenUsageByNode(ctx); err != nil {
+		t.Fatalf("ProviderTokenUsageByNode: %v", err)
+	}
+	return time.Since(start)
 }
 
 var _ = sql.ErrNoRows
