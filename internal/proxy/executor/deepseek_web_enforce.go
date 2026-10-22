@@ -177,6 +177,14 @@ func deepSeekEnforcementForCode(code int, message string) *deepSeekEnforcement {
 		// Not an enforcement: a dead or absent credential is an auth failure
 		// the caller already maps to a 401.
 		return nil
+	case deepSeekCodeRequestEncrypted:
+		// The request body was not in the shape the site expects. That is
+		// the gateway's own problem, not the account's, and it is not a
+		// credential failure: the token was fine.
+		return &deepSeekEnforcement{
+			Kind:    deepSeekEnforced,
+			Message: "the upstream refused the request body: " + message,
+		}
 	case deepSeekCodeUserBanned:
 		return &deepSeekEnforcement{
 			Kind:    deepSeekBanned,

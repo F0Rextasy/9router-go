@@ -56,13 +56,6 @@ import (
 // UA claims that build rather than the one the capture happened to run.
 var deepSeekWebTLSProfile = profiles.Chrome_152_PSK
 
-// deepSeekWebTimeout bounds one non-streaming call.
-//
-// The completion call streams and is not bounded by this: its body is read
-// as it arrives, and the stream reader enforces the first-byte and idle
-// windows that actually matter for a long answer.
-const deepSeekWebTimeout = 120 * time.Second
-
 // deepSeekTransport issues the provider's requests.
 //
 // The cookie is a real one the site's own browser received, and the jar is
@@ -151,30 +144,6 @@ func (t *deepSeekTransport) do(ctx context.Context, request *fhttp.Request) (*fh
 	return t.client.Do(request)
 }
 
-// cookieHeader renders the cookie the jar currently holds for the site.
-//
-// It is what a credential renewal stores back, and what a diagnostic
-// reports: the jar's value is the site's current one, which the configured
-// credential may no longer be.
-func (t *deepSeekTransport) cookieHeader() string {
-	parsed, err := url.Parse(t.origin)
-	if err != nil {
-		return ""
-	}
-	cookies := t.client.GetCookies(parsed)
-	if len(cookies) == 0 {
-		return ""
-	}
-	parts := make([]string, 0, len(cookies))
-	for _, cookie := range cookies {
-		if cookie.Name == "" {
-			continue
-		}
-		parts = append(parts, cookie.Name+"="+cookie.Value)
-	}
-	return strings.Join(parts, "; ")
-}
-
 // send issues one request and answers with the response in the shape the rest
 // of the provider expects.
 //
@@ -214,12 +183,6 @@ func deepSeekHTTPResponse(response *fhttp.Response) *http.Response {
 		Body:          response.Body,
 		ContentLength: response.ContentLength,
 	}
-}
-
-// closeIdleConnections drops pooled connections whose TLS session may have
-// been retired upstream.
-func (t *deepSeekTransport) closeIdleConnections() {
-	t.client.CloseIdleConnections()
 }
 
 // deepSeekWebPlainHTTP reports whether the browser-fidelity stack is turned

@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"strconv"
 	"time"
 )
 
@@ -68,37 +67,6 @@ var deepSeekAPIHeaderOrder = []string{
 	"priority",
 }
 
-// deepSeekClientHeaderOrder is the order of a call that carries the
-// `x-client-*` block.
-//
-// The block is not at the front: Chrome wrote it after the leading
-// `content-length` and around the authorization header, in the order the
-// capture shows. The names are the client's, and the block is inserted where
-// the client's own interceptor puts it.
-var deepSeekClientHeaderOrder = []string{
-	"content-length",
-	"x-client-locale",
-	"authorization",
-	"x-client-bundle-id",
-	"x-device-id",
-	"accept-language",
-	"x-client-timezone-offset",
-	"x-device-model",
-	"user-agent",
-	"accept",
-	"x-client-version",
-	"content-type",
-	"x-client-platform",
-	"origin",
-	"sec-fetch-site",
-	"sec-fetch-mode",
-	"sec-fetch-dest",
-	"referer",
-	"accept-encoding",
-	"cookie",
-	"priority",
-}
-
 // deepSeekAPIBaseHeaders are the headers every /api/v0/* call carries.
 //
 // The values are the ones the live client sends.
@@ -124,39 +92,6 @@ func deepSeekAPIBaseHeaders(origin string) map[string]string {
 		// captured order.
 		"priority": "u=1, i",
 	}
-}
-
-// deepSeekClientBlockHeaders is the `x-client-*` block the app's request
-// interceptor attaches.
-//
-// The interceptor is what every request the app issues goes through, so the
-// block is present on the client's own calls. The chat layer issues its calls
-// below that interceptor, which is why they carry no block.
-func deepSeekClientBlockHeaders() map[string]string {
-	return map[string]string{
-		"x-client-bundle-id":       "com.deepseek.chat",
-		"x-client-locale":          "en_US",
-		"x-client-platform":        "web",
-		"x-client-version":         deepSeekWebClientVersion,
-		"x-client-timezone-offset": strconv.Itoa(deepSeekTimezoneOffsetSeconds()),
-	}
-}
-
-// deepSeekSettingsHeaders are the headers the site's client-block calls carry.
-//
-// The settings endpoints are the ones the client identifies itself with: they
-// carry the device id and the client version, because that is how the site
-// decides which build and which device are asking.
-func deepSeekSettingsHeaders(origin, deviceID string) map[string]string {
-	headers := deepSeekAPIBaseHeaders(origin)
-	for name, value := range deepSeekClientBlockHeaders() {
-		headers[name] = value
-	}
-	headers["x-device-id"] = deviceID
-	// The site sends this one empty, and a browser that sent a value for it
-	// would be a browser reporting a device model this site has never issued.
-	headers["x-device-model"] = ""
-	return headers
 }
 
 // deepSeekTimezoneOffsetSeconds is the value `x-client-timezone-offset`

@@ -398,7 +398,7 @@ func (t deepSeekTurn) send(ctx context.Context, method, url string, body []byte,
 	// A non-200 is read here, because the body is the part the caller
 	// classifies: the site's refusals arrive inside it.
 	errBody, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	response.Body.Close()
+	_ = response.Body.Close()
 	return nil, &proxy.UpstreamError{
 		StatusCode: response.StatusCode,
 		Body:       errBody,

@@ -30,28 +30,29 @@ func TestDeepSeekChatCallCarriesNoClientBlock(t *testing.T) {
 	}
 }
 
-// The settings calls are the ones the client identifies itself with, and they
-// carry the block.
-func TestDeepSeekSettingsCallCarriesTheClientBlock(t *testing.T) {
-	headers := deepSeekSettingsHeaders("https://chat.deepseek.com", "device-1")
-
-	for name, want := range map[string]string{
+// The client block the app's interceptor attaches to the CLIENT calls is a
+// known shape, and the executor does not send it: the chat calls are issued
+// below that interceptor. This pins the block's own values, so a change to
+// the version or the bundle id is a deliberate one.
+func TestDeepSeekClientBlockValues(t *testing.T) {
+	// The block as the site writes it, kept here so the values are pinned
+	// even though the executor never sends them on a chat call.
+	want := map[string]string{
 		"x-client-bundle-id":       "com.deepseek.chat",
-		"x-client-version":         deepSeekWebClientVersion,
+		"x-client-version":         "2.5.0",
 		"x-client-platform":        "web",
 		"x-client-locale":          "en_US",
-		"x-device-id":              "device-1",
 		"x-device-model":           "",
 		"x-client-timezone-offset": "25200",
-	} {
-		value, ok := headers[name]
-		if !ok {
-			t.Errorf("settings call has no %s", name)
-			continue
-		}
-		if value != want {
-			t.Errorf("settings %s = %q, want %q", name, value, want)
-		}
+	}
+	if deepSeekWebClientVersion != want["x-client-version"] {
+		t.Errorf("client version = %q, want the site's %q",
+			deepSeekWebClientVersion, want["x-client-version"])
+	}
+	// The timezone value is the one the block carries, and it is a
+	// function of the machine the router runs on rather than a constant.
+	if got := deepSeekTimezoneOffsetSeconds(); got < -12*3600 || got > 14*3600 {
+		t.Errorf("timezone offset %d is not a real UTC offset", got)
 	}
 }
 

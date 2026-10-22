@@ -156,31 +156,3 @@ func readJSONString(data []byte) (string, bool) {
 func ProfileFromCookieDB(cookieDBPath string) string {
 	return filepath.Dir(cookieDBPath)
 }
-
-// bytesIndex is bytes.Index, kept apart so the scanning above reads as one
-// operation rather than a mix of helpers.
-func bytesIndex(haystack, needle []byte) int {
-	if len(needle) == 0 {
-		return 0
-	}
-	limit := len(haystack) - len(needle)
-	for i := 0; i <= limit; i++ {
-		if bytesEqual(haystack[i:i+len(needle)], needle) {
-			return i
-		}
-	}
-	return -1
-}
-
-// bytesEqual compares two byte slices.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
