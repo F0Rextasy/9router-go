@@ -845,10 +845,10 @@ export function parseQuotaData(provider: string, data: unknown): NormalizedQuota
               total: Number(quota.total) || 0,
               resetAt: (quota.resetAt as string) || null,
               remainingPercentage: quota.remainingPercentage !== undefined ? Number(quota.remainingPercentage) : undefined,
-              isCreditBalance: quota.isCreditBalance,
+              isCreditBalance: quota.isCreditBalance !== undefined ? Boolean(quota.isCreditBalance) : undefined,
               currency: quota.currency as string | undefined,
               unit: quota.unit as string | undefined,
-              unlimited: quota.unlimited,
+              unlimited: quota.unlimited !== undefined ? Boolean(quota.unlimited) : undefined,
             })
           })
         }
