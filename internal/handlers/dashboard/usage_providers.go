@@ -843,7 +843,7 @@ func ollamaBalanceQuotas(ctx context.Context, apiKey string, quotas map[string]a
 				remPct = math.Round(balanceUSD/allowance*10000) / 100
 			}
 			quota := map[string]any{
-				"used": math.Max(0, math.Round((allowance-balanceUSD)*100)/100),
+				"used":  math.Max(0, math.Round((allowance-balanceUSD)*100)/100),
 				"total": allowance, "remainingPercentage": remPct,
 				"resetAt": nil, "unlimited": false, "unit": "USD",
 			}
