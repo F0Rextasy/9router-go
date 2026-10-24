@@ -114,11 +114,17 @@ func (h *ChatHandler) handleAccountFallback(
 				apiKey = "public"
 			}
 			proxyPoolID := h.ResolveProviderProxyPoolID(provider)
-			return h.tryForwardWithConnection(forwardRequestParams{
+			if err := h.tryForwardWithConnection(forwardRequestParams{
 				Ctx: ctx, W: w, Provider: provider, Model: model,
 				ConnectionID: "default", ConnData: &ConnectionData{APIKey: apiKey, ProxyPoolID: proxyPoolID}, Body: body,
 				IsStream: isStream, TranslateResponse: translateResponse, Endpoint: endpoint,
-			})
+			}); err != nil {
+				// Same contract as the multi-connection loop's return: a
+				// free-tier refusal leaves this path as the classified
+				// answer, not the upstream body verbatim.
+				return opencodeClosureError(provider, model, err)
+			}
+			return nil
 		}
 		observ.IncFallback(provider, model, observ.FallbackReasonNoConnection)
 		return fmt.Errorf("no active connections for provider: %s", provider)
@@ -274,20 +280,22 @@ func (h *ChatHandler) handleAccountFallback(
 
 // opencodeClosureError turns a free-tier refusal that survived the executor's
 // retries into a response the caller can act on, instead of forwarding the
-// upstream 403 verbatim.
+// upstream body verbatim.
 //
-// The gate answers 403 FreeTierError when it is not serving free traffic from
-// this egress at that moment. That is a temporary unavailability of a shared
-// free tier, not a verdict on the caller's credentials — but a 403 is read as
-// "you are not allowed" by every client, including this gateway's own
-// callers, so an agent loop stops mid-tool-call and the user is left with a
-// wall of text about downloading OpenCode.
+// The gate refuses in two shapes (see isOpencodeFreeTierRefusal): a 403
+// FreeTierError when it is not serving free traffic from this egress at that
+// moment, and a 429 FreeUsageLimitError once the free budget is spent. That is
+// a temporary unavailability of a shared free tier, not a verdict on the
+// caller's credentials — but a 403 is read as "you are not allowed" by every
+// client, including this gateway's own callers, so an agent loop stops
+// mid-tool-call and the user is left with a wall of text about downloading
+// OpenCode.
 //
-// 503 + Retry-After is the honest signal for "temporarily not available, come
-// back": it tells a client to back off and retry rather than to give up or to
-// assume its key is wrong. The upstream's own wording is preserved in the
-// message so the cause is still diagnosable, and the type names the condition
-// so a client can branch on it without string matching.
+// The classified answer keeps the caller's back-off honest: 429/503 plus a
+// Retry-After, so a client waits and retries rather than giving up or assuming
+// its key is wrong. The upstream's own wording is preserved in the message so
+// the cause is still diagnosable, and the type names the condition so a client
+// can branch on it without string matching.
 type opencodeRefusalDetail struct {
 	StatusCode int
 	ErrorType  string
@@ -298,6 +306,11 @@ type opencodeRefusalDetail struct {
 func classifyOpencodeFreeTierRefusal(provider string, body []byte) opencodeRefusalDetail {
 	msg := extractErrorText(body)
 	lower := strings.ToLower(msg)
+	// The type token is the stable half of the payload. extractErrorText keeps
+	// only the message, and the usage-limit message ("Free usage limit reached.
+	// Subscribe to OpenCode Go to keep going") names neither a rate limit nor a
+	// quota — so the token has to be read for the shape to be classified.
+	token := strings.ToLower(string(body))
 
 	switch {
 	case strings.Contains(lower, "not available in your country") ||
@@ -310,10 +323,7 @@ func classifyOpencodeFreeTierRefusal(provider string, body []byte) opencodeRefus
 			Message:    fmt.Sprintf("OpenCode's free tier is not available in your region (%s). Route through a proxy pool in a supported country.", provider),
 		}
 
-	case strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "freeusagelimiterror") ||
-		strings.Contains(lower, "quota"):
+	case isOpencodeQuotaRefusal(lower, token):
 		return opencodeRefusalDetail{
 			StatusCode: http.StatusTooManyRequests,
 			ErrorType:  "free_tier_quota_exhausted",
@@ -352,6 +362,17 @@ func classifyOpencodeFreeTierRefusal(provider string, body []byte) opencodeRefus
 			RetryAfter: retryAfterSeconds,
 		}
 	}
+}
+
+// isOpencodeQuotaRefusal reports whether the gate's answer is its usage-limit
+// shape: the FreeUsageLimitError type token, or prose naming a rate limit or a
+// quota (the 403 lane reports the same condition in words).
+func isOpencodeQuotaRefusal(msg, token string) bool {
+	return strings.Contains(token, "freeusagelimiterror") ||
+		strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "too many requests") ||
+		strings.Contains(msg, "quota") ||
+		strings.Contains(msg, "usage limit")
 }
 
 func opencodeClosureError(provider, model string, err error) error {
@@ -1513,25 +1534,41 @@ func mentionsGate(lower string) bool {
 // free-tier gate refusing to serve this traffic, rather than a problem with the
 // account, key or request.
 //
-// The gate answers 403 with a body whose type is FreeTierError when it is not
-// serving free traffic from this egress at that moment. That says nothing about
-// the caller's credentials, and a 403 is read as "you are not allowed" by every
-// client — so it must not be forwarded verbatim; see opencodeClosureError.
+// The gate answers in two shapes, and both mean the same thing — it is not
+// serving this egress at that moment:
 //
-// The provider check keeps every other provider's 403 handling untouched, and
-// the body check keeps a genuine OpenCode auth or quota 403 on the normal path.
+//   - 403 with a body whose type is FreeTierError, when the request does not
+//     look like the official client.
+//   - 429 with a body whose type is FreeUsageLimitError ("Free usage limit
+//     reached. Subscribe to OpenCode Go to keep going"), when the free budget
+//     accounted to this egress is spent.
+//
+// Neither says anything about the caller's credentials, and both are read as a
+// verdict on the request by every client — so neither may be forwarded verbatim;
+// see opencodeClosureError. The 429 in particular must not cool the account
+// down: the account is healthy, the egress is not.
+//
+// The provider check keeps every other provider's 403/429 handling untouched,
+// and the body check keeps a genuine OpenCode auth or billing error on the
+// normal path.
 func isOpencodeFreeTierRefusal(provider string, ue *upstreamError) bool {
 	switch provider {
 	case "opencode", "opencode-zen", "opencode-go":
 	default:
 		return false
 	}
-	if ue == nil || ue.StatusCode != http.StatusForbidden {
+	if ue == nil {
 		return false
 	}
 	// Match the error type, not the prose: the gate's message text has already
 	// been reworded once.
-	return bytes.Contains(ue.Body, []byte("FreeTierError"))
+	switch ue.StatusCode {
+	case http.StatusForbidden:
+		return bytes.Contains(ue.Body, []byte("FreeTierError"))
+	case http.StatusTooManyRequests:
+		return bytes.Contains(ue.Body, []byte("FreeUsageLimitError"))
+	}
+	return false
 }
 
 func isModelScopedError(statusCode int, errorText string, model string, bodies ...[]byte) bool {
@@ -1546,7 +1583,10 @@ func isModelScopedError(statusCode int, errorText string, model string, bodies .
 	// the failover loop answers it by rotating the proxy pool, so it must not
 	// be recorded as a model-scoped lock. Matched on the body's error type —
 	// the prose is not stable enough to key on, and every other 403 keeps the
-	// existing cooldown-only handling (it never rotates a pool).
+	// existing cooldown-only handling (it never rotates a pool). The 429 shape
+	// (FreeUsageLimitError) is caught by isOpencodeFreeTierRefusal before this
+	// classifier runs; the 403 shape is kept here so a caller that reaches this
+	// function directly still never treats the refusal as a model lock.
 	if statusCode == http.StatusForbidden {
 		for _, body := range bodies {
 			if bytes.Contains(body, []byte("FreeTierError")) {
