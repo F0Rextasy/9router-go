@@ -647,16 +647,20 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 			baseURL = strings.TrimSuffix(baseURL, "/chat/completions")
 			cfg.BaseURL = opencodeInferenceBase(baseURL) + "/responses"
 		}
-		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), req.IsStream)
+		baseHeaders := cfg.StaticHeaders
+		hint := opencodeSessionHint(req, true)
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, req.IsStream)
 		ctx := req.Ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+		resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 			return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, transformedBody, req.IsStream)
 		}, func() (*http.Response, error) {
 			return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, transformedBody, req.IsStream)
-		})
+		}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+			cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, req.IsStream)
+		}))
 		if err != nil {
 			return fmt.Errorf("ForwardOpencode (muse-spark responses): %w", err)
 		}
@@ -705,17 +709,21 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	} else {
 		cfg.BaseURL = opencodeChatURL(cfg.BaseURL)
 	}
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
+	baseHeaders := cfg.StaticHeaders
+	hint := opencodeSessionHint(req, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+	resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 		return forwardOpencodeRequest(ctx, req.Client, &cfg, apiKey, body, true)
 	}, func() (*http.Response, error) {
 		return forwardOpencodeRequestDirect(ctx, &cfg, apiKey, body, true)
-	})
+	}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
+	}))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencode: %w", err)
 	}
@@ -1546,17 +1554,21 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	} else {
 		cfg.BaseURL = opencodeGoInferenceBase(cfg.BaseURL) + "/chat/completions"
 	}
-	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, opencodeSessionHint(req, true), true)
+	baseHeaders := cfg.StaticHeaders
+	hint := opencodeSessionHint(req, true)
+	cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(cfg.StaticHeaders, hint, true)
 
 	ctx := req.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resp, err := forwardOpenCode(ctx, func() (*http.Response, error) {
+	resp, err := forwardOpenCodeRotating(ctx, func() (*http.Response, error) {
 		return forwardOpencodeRequest(ctx, req.Client, &cfg, "public", body, true)
 	}, func() (*http.Response, error) {
 		return forwardOpencodeRequestDirect(ctx, &cfg, "public", body, true)
-	})
+	}, rotateOpencodeStableSession(opencodeStableSessionKey(req, true), hint, func(session string) {
+		cfg.StaticHeaders = proxy.BuildOpenCodeHeaders(baseHeaders, session, true)
+	}))
 	if err != nil {
 		return fmt.Errorf("ForwardOpencodeGo (free lane): %w", err)
 	}

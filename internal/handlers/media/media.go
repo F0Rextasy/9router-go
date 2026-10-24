@@ -314,7 +314,16 @@ func (h *MediaHandler) forwardSystemoneRequest(w http.ResponseWriter, r *http.Re
 		}
 	}
 	if modelInfo.Provider == "opencode" || modelInfo.Provider == "opencode-zen" {
-		req.Header.Set("x-opencode-session", proxy.GenerateOpenCodeSessionID())
+		// One stable session per provider+connection, like the chat lanes:
+		// minting a fresh session per request drains the egress budget at
+		// mint time and surfaces as 429 FreeUsageLimitError. A separate
+		// namespace from the chat lanes keeps media traffic from drawing on
+		// a conversation's session budget.
+		mediaSessionKey := "media:" + modelInfo.Provider
+		if modelInfo.ConnectionID != "" {
+			mediaSessionKey += ":conn:" + modelInfo.ConnectionID
+		}
+		req.Header.Set("x-opencode-session", proxy.StableOpenCodeSessionID(mediaSessionKey))
 	}
 	client, clientErr := h.ChatH.GetClientForConnection(connData)
 	if clientErr != nil {
