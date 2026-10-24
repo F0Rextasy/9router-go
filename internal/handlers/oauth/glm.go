@@ -1,6 +1,8 @@
 package oauth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -43,7 +45,7 @@ var (
 )
 
 func glmStart() (map[string]any, error) {
-	pollToken := randomString(64)
+	pollToken := glmRandomHex(32)
 	data, status, err := postJSON(glmCLIInitURL, map[string]any{"provider": "zai"},
 		map[string]string{"Authorization": "Bearer " + pollToken})
 	if err != nil {
@@ -72,6 +74,20 @@ func glmStart() (map[string]any, error) {
 			"expiresIn":      expiresIn,
 		},
 	}, nil
+}
+
+// glmRandomHex returns n random bytes hex-encoded (2n hex chars), matching
+// upstream crypto.randomBytes(32).toString("hex") — ZCode rejects non-hex
+// bearer tokens with invalid_flow, so the poll token must be exactly hex.
+func glmRandomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err == nil {
+		return hex.EncodeToString(b)
+	}
+	// crypto/rand failure (extremely rare): fall back to a 2n-char base62
+	// token. ZCode accepts hex and rejects base62, but a functioning poll
+	// token beats a hard 500 under a broken CSPRNG.
+	return strings.ToLower(randomString(2 * n))
 }
 
 // glmRelativeSeconds converts an absolute epoch (s or ms) into the seconds
