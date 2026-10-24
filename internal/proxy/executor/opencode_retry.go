@@ -71,7 +71,7 @@ func refusedResponseToError(resp *http.Response) *proxy.UpstreamError {
 		return nil
 	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, constants.UpstreamErrLimit))
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return &proxy.UpstreamError{StatusCode: resp.StatusCode, Body: body}
 }
 
@@ -92,7 +92,8 @@ func forwardOpenCode(ctx context.Context, send, sendDirect func() (*http.Respons
 	resp, err := send()
 	if err == nil {
 		if ue := refusedResponseToError(resp); ue != nil {
-			resp, err = nil, ue
+			// The response is consumed; the refusal now lives in err.
+			err = ue
 		} else {
 			return resp, nil
 		}
