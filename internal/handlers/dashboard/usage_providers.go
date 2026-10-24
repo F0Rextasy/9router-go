@@ -704,8 +704,9 @@ func addUTCMonths(t time.Time, months int) time.Time {
 // Ollama Cloud endpoints. Vars, not consts, so tests can point them at a
 // local server.
 var (
-	ollamaUsageURL = "https://ollama.com/api/usage"
-	ollamaMeURL    = "https://ollama.com/api/me"
+	ollamaUsageURL   = "https://ollama.com/api/usage"
+	ollamaMeURL      = "https://ollama.com/api/me"
+	ollamaBalanceURL = "https://ollama.com/api/balance"
 )
 
 func fetchOllamaUsage(ctx context.Context, apiKey string) usageResult {
@@ -777,10 +778,91 @@ func fetchOllamaUsage(ctx context.Context, apiKey string) usageResult {
 		}
 		quotas[window.Label] = ollamaRatioQuota(ratio, resetAt)
 	}
+	// Ollama Cloud moved the active quota limits to /api/balance; /api/usage
+	// now only carries activity history, so accounts on the new API report
+	// nothing from the limits map above.
+	if len(quotas) == 0 {
+		ollamaBalanceQuotas(ctx, apiKey, quotas)
+	}
 	if len(quotas) == 0 {
 		return usageResult{plan: plan, message: "Ollama Cloud connected. No usage limits reported.", quotas: map[string]any{}}
 	}
 	return usageResult{plan: plan, quotas: quotas}
+}
+
+// ollamaBalanceQuotas parses https://ollama.com/api/balance into the quota
+// table: the session (5h) and weekly (7d) remaining percentages with their
+// reset timestamps, the USD allowance window, and purchased credits.
+// Best-effort — a missing or malformed balance leaves the table empty so the
+// caller keeps its "no usage limits" message.
+func ollamaBalanceQuotas(ctx context.Context, apiKey string, quotas map[string]any) {
+	headers := map[string]string{
+		"Authorization": "Bearer " + strings.TrimSpace(apiKey),
+		"Accept":        "application/json",
+	}
+	status, _, out, err := usageGet(ctx, ollamaBalanceURL, headers)
+	if err != nil || status < 200 || status >= 300 {
+		return
+	}
+	balance := usageJSON(out)
+	if balance == nil {
+		return
+	}
+	inc, _ := balance["included"].(map[string]any)
+	ollamaRemainingWindow := func(key, label string) {
+		entry, ok := inc[key].(map[string]any)
+		if !ok {
+			return
+		}
+		// A missing or non-numeric remaining_percent reads as untouched, not
+		// as exhausted.
+		rem := 100.0
+		if v, ok := usageNumOK(entry["remaining_percent"]); ok {
+			rem = math.Max(0, math.Min(100, v))
+		}
+		quota := map[string]any{
+			"used": math.Round((100-rem)*100) / 100, "total": float64(100),
+			"remainingPercentage": rem, "resetAt": nil, "unlimited": false,
+		}
+		if s := usageStr(entry["resets_at"]); s != "" {
+			quota["resetAt"] = s
+		}
+		quotas[label] = quota
+	}
+	if inc != nil {
+		ollamaRemainingWindow("session", "Session (5h)")
+		ollamaRemainingWindow("weekly", "Weekly (7d)")
+
+		_, aPresent := inc["allowance_usd"]
+		_, bPresent := inc["balance_usd"]
+		if aPresent && bPresent {
+			allowance, _ := usageNumOK(inc["allowance_usd"])
+			balanceUSD, _ := usageNumOK(inc["balance_usd"])
+			remPct := 0.0
+			if allowance > 0 {
+				remPct = math.Round(balanceUSD/allowance*10000) / 100
+			}
+			quota := map[string]any{
+				"used": math.Max(0, math.Round((allowance-balanceUSD)*100)/100),
+				"total": allowance, "remainingPercentage": remPct,
+				"resetAt": nil, "unlimited": false, "unit": "USD",
+			}
+			if period, ok := inc["period"].(map[string]any); ok {
+				if s := usageStr(period["until"]); s != "" {
+					quota["resetAt"] = s
+				}
+			}
+			quotas["Allowance ($)"] = quota
+		}
+	}
+	if purchased, ok := balance["purchased"].(map[string]any); ok {
+		if v, ok := usageNumOK(purchased["balance_usd"]); ok && v > 0 {
+			quotas["Purchased Credits"] = map[string]any{
+				"used": float64(0), "total": v, "remainingPercentage": float64(100),
+				"isCreditBalance": true, "currency": "$",
+			}
+		}
+	}
 }
 
 func usageNumOK(v any) (float64, bool) {
