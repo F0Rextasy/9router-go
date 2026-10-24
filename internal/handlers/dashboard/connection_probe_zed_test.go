@@ -13,11 +13,11 @@ import (
 // zedProbeServer stands in for cloud.zed.dev and records the auth headers it
 // was shown, so the test can assert the credential travelled verbatim.
 type zedProbeServer struct {
-	srv      *httptest.Server
-	seenAuth []string
-	meStatus int
+	srv       *httptest.Server
+	seenAuth  []string
+	meStatus  int
 	llmStatus int
-	models   string
+	models    string
 }
 
 func newZedProbeServer(t *testing.T) *zedProbeServer {

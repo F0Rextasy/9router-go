@@ -237,7 +237,7 @@ func zedMintLLMToken(ctx context.Context, client *http.Client, creds ZedCredenti
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("zed: llm token request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("zed: read llm token response: %w", err)
@@ -302,7 +302,7 @@ func ZedFetchModels(ctx context.Context, client *http.Client, creds ZedCredentia
 	if err != nil {
 		return nil, fmt.Errorf("zed: models request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, fmt.Errorf("zed: read models response: %w", err)

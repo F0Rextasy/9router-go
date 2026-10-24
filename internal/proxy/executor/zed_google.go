@@ -22,7 +22,7 @@ import (
 // zedGeminiStream translates a Zed google stream into OpenAI chat SSE.
 func zedGeminiStream(w http.ResponseWriter, req *Request, upstream io.Reader) error {
 	hw := proxy.NewHeartbeatWriter(req.Ctx, w, 0)
-	defer hw.Close()
+	defer func() { _ = hw.Close() }()
 	flusher := proxy.WriteSSEHeaders(hw)
 
 	state := &translator.GeminiStreamState{
@@ -63,7 +63,7 @@ func zedGeminiStream(w http.ResponseWriter, req *Request, upstream io.Reader) er
 			*req.TTFT = time.Since(startTime).Milliseconds()
 		}
 		if req.ResponseBuf != nil {
-			req.ResponseBuf.Write(out)
+			_, _ = req.ResponseBuf.Write(out)
 		}
 		if _, werr := hw.Write(out); werr != nil {
 			writeErr = werr

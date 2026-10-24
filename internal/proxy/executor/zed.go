@@ -604,7 +604,7 @@ func zedMintLLMToken(ctx context.Context, client *http.Client, origin string, cr
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("zed: llm token request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("zed: read llm token response: %w", err)
@@ -716,10 +716,10 @@ func ForwardZed(w http.ResponseWriter, req *Request) error {
 		}
 	}
 
-	var bodyCloser io.Closer = resp.Body
+	var bodyCloser = resp.Body
 	defer func() {
 		if bodyCloser != nil {
-			bodyCloser.Close()
+			_ = bodyCloser.Close()
 		}
 	}()
 	forwardUpstreamResponseHeaders(w, resp.Header)

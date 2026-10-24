@@ -56,10 +56,10 @@ func fetchZedCatalogModels(ctx context.Context, conn *models.ProviderConnection,
 		SystemID:       zedCatalogString(connData, "systemId"),
 	}
 	if creds.AccessToken == "" {
-		return nil, fmt.Errorf("Zed credential is missing — re-authorize this connection")
+		return nil, fmt.Errorf("zed credential is missing — re-authorize this connection")
 	}
 	if creds.UserID == "" {
-		return nil, fmt.Errorf("Zed user id is missing — re-authorize this connection")
+		return nil, fmt.Errorf("zed user id is missing — re-authorize this connection")
 	}
 
 	catalog, err := providers.ZedFetchModels(ctx, nil, creds)
