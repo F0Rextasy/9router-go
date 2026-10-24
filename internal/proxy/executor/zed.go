@@ -164,12 +164,13 @@ func BuildZedCompletionBody(openAIRequest []byte, wire ZedWireModel, threadID st
 // envelope. The OpenAI→Claude request conversion is the repo's own
 // (EnsureClaudeMessagesFor), so tools, tool_choice, system extraction and the
 // alternating-role invariant behave exactly as they do on every other
-// Claude-shaped lane. Anthropic's capability row is the one consulted for the
-// thinking shape: this body is literally an Anthropic request.
+// Claude-shaped lane. The lane id "zed" (not the wire provider "anthropic") is
+// the one consulted for the thinking shape: capabilities pins claude-haiku-5-5
+// to adaptive thinking on this lane, which another provider's row would not see.
 func zedClaudeProviderRequest(openAIBody []byte, model string) (map[string]any, error) {
 	claudeBody := openAIBody
 	if !zedBodyIsClaude(openAIBody) {
-		claudeBody = EnsureClaudeMessagesFor(openAIBody, "anthropic", model)
+		claudeBody = EnsureClaudeMessagesFor(openAIBody, "zed", model)
 	}
 
 	var body map[string]any

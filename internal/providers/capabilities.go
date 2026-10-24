@@ -408,6 +408,21 @@ var providerCapabilities = map[string]map[string]Capabilities{
 		"MiniMax-M2.7":               {Reasoning: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 200000, MaxOutput: 128000},
 		"MiniMax-M2.7-highspeed":     {Reasoning: true, Tools: true, ThinkingFormat: "claude-adaptive", ThinkingCanDisable: new(false), ContextWindow: 200000, MaxOutput: 128000},
 	},
+	// Zed's hosted Anthropic lane serves claude-haiku-5-5 with adaptive
+	// thinking. The global *claude*haiku* pattern emits the budget shape
+	// (thinking.type.enabled + budget_tokens), which Zed rejects with 400:
+	// `"thinking.type.enabled" is not supported for this model. Use
+	// "thinking.type.adaptive" and "output_config.effort"`. claude-adaptive
+	// emits exactly that pair, so the id is pinned here for the zed lane only
+	// — other lanes keep the budget shape for the same id. Port of upstream
+	// decolua/9router open-sse/providers/capabilities.js, which pins the same
+	// id for opencode-go; Zed routes this model through the same Anthropic
+	// backend. Limits follow the model, not the pattern: the Zed catalogue
+	// reports 1M context / 128k output, not the 200k/8192 the haiku substring
+	// table guesses.
+	"zed": {
+		"claude-haiku-5-5": {Vision: true, Reasoning: true, Search: true, Tools: true, ThinkingFormat: "claude-adaptive", ContextWindow: 1000000, MaxOutput: 128000},
+	},
 }
 
 func init() {
