@@ -149,7 +149,7 @@
     providerId === 'github' || providerId === 'kiro' || providerId === 'kimi' ||
     providerId === 'kimi-coding' || providerId === 'codebuddy-cn' || providerId === 'codebuddy-intl' ||
     providerId === 'minimax-code' || providerId === 'minimax-code-global' || providerId === 'muse' ||
-    providerId === 'nous'
+    providerId === 'nous' || providerId === 'glm'
   )
   // Upstream parity: only the explicit noAuth flag hides the Connections card
   // ([id]/page.js isFreeNoAuth = !!FREE_PROVIDERS[id]?.noAuth). Category "free"

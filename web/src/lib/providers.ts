@@ -1382,21 +1382,22 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     "website": "https://open.bigmodel.cn",
     "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys"},
     "noAuth": false,
+    "priority": 130,
     "serviceKinds": [
       "llm"
     ]
   },
   {
     "id": "glm",
-    "name": "GLM Coding",
-    "category": "apikey",
+    "name": "Zai GLM Coding",
+    "category": "oauth",
     "alias": "glm",
     "color": "#2563EB",
     "icon": "code",
     "website": "https://open.bigmodel.cn",
-    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys"},
-    "authType": "apikey",
+    "notice": {"apiKeyUrl":"https://open.bigmodel.cn/usercenter/apikeys","signupUrl":"https://chat.z.ai"},
     "noAuth": false,
+    "authModes": ["oauth", "apikey"],
     "priority": 140,
     "serviceKinds": [
       "llm",
