@@ -14,19 +14,19 @@ import (
 // is dual-auth: an API key may be pasted, or the Z.ai account signed in through
 // the ZCode CLI polling protocol — no PKCE, no local callback:
 //
-//	1) POST https://zcode.z.ai/api/v1/oauth/cli/init
-//	     Authorization: Bearer <random poll token>
-//	     {"provider":"zai"}
-//	     → { code: 0, data: { authorize_url, flow_id, poll_interval_sec, expires_at } }
-//	2) Browser opens authorize_url; user signs in with the Z.ai account
-//	3) GET https://zcode.z.ai/api/v1/oauth/cli/poll/<flow_id>
-//	     Authorization: Bearer <poll token>
-//	     → { code: 0, data: { status: "pending" } } until
-//	       { code: 0, data: { status: "ready", token, user, zai: { access_token } } }
-//	4) access_token (Z.AI OAuth token) → POST https://api.z.ai/api/auth/z/login
-//	     {"token": ...} → { data: { access_token } } (platform business JWT)
-//	5) Business JWT → coding-plan API key via getCustomerInfo → api_keys
-//	   list/create("zcode-api-key") → copy → "apiKey.secretKey"
+//  1. POST https://zcode.z.ai/api/v1/oauth/cli/init
+//     Authorization: Bearer <random poll token>
+//     {"provider":"zai"}
+//     → { code: 0, data: { authorize_url, flow_id, poll_interval_sec, expires_at } }
+//  2. Browser opens authorize_url; user signs in with the Z.ai account
+//  3. GET https://zcode.z.ai/api/v1/oauth/cli/poll/<flow_id>
+//     Authorization: Bearer <poll token>
+//     → { code: 0, data: { status: "pending" } } until
+//     { code: 0, data: { status: "ready", token, user, zai: { access_token } } }
+//  4. access_token (Z.AI OAuth token) → POST https://api.z.ai/api/auth/z/login
+//     {"token": ...} → { data: { access_token } } (platform business JWT)
+//  5. Business JWT → coding-plan API key via getCustomerInfo → api_keys
+//     list/create("zcode-api-key") → copy → "apiKey.secretKey"
 //
 // The coding-plan key is the long-lived model credential, stored by
 // saveDeviceConnection in both apiKey and accessToken like the other
@@ -183,65 +183,65 @@ func glmResolveCodingPlanKey(zaiAccessToken string) (planKey, businessToken stri
 		"Content-Type":  "application/json",
 	}
 
-customerInfo, status, gerr := getJSON(glmBizAPIBaseURL+"/api/biz/customer/getCustomerInfo", headers)
-if gerr != nil || status != http.StatusOK || !glmSuccessCode(strVal(customerInfo, "code")) {
-	return "", "", fmt.Errorf("Z.ai customer info failed (HTTP %d): %w", status, gerr)
-}
-// fetchBusinessJson unwraps payload.data before pickOrgAndProject runs, so the
-// customer info object (with organizations) is what we pick from.
-customerData, _ := customerInfo["data"].(map[string]any)
-if customerData == nil {
-	customerData = customerInfo
-}
-location, lok := glmPickOrgAndProject(customerData)
-if !lok {
-	return "", "", fmt.Errorf("unable to resolve Z.ai organization and project for the coding plan")
-}
+	customerInfo, status, gerr := getJSON(glmBizAPIBaseURL+"/api/biz/customer/getCustomerInfo", headers)
+	if gerr != nil || status != http.StatusOK || !glmSuccessCode(strVal(customerInfo, "code")) {
+		return "", "", fmt.Errorf("getCustomerInfo for Z.ai failed (HTTP %d): %w", status, gerr)
+	}
+	// fetchBusinessJson unwraps payload.data before pickOrgAndProject runs, so the
+	// customer info object (with organizations) is what we pick from.
+	customerData, _ := customerInfo["data"].(map[string]any)
+	if customerData == nil {
+		customerData = customerInfo
+	}
+	location, lok := glmPickOrgAndProject(customerData)
+	if !lok {
+		return "", "", fmt.Errorf("unable to resolve Z.ai organization and project for the coding plan")
+	}
 
-keysURL := fmt.Sprintf("%s/api/biz/v1/organization/%s/projects/%s/api_keys",
-	glmBizAPIBaseURL, url.PathEscape(location.organizationID), url.PathEscape(location.projectID))
-keys, status, gerr := getJSON(keysURL, headers)
-if gerr != nil || status != http.StatusOK {
-	return "", "", fmt.Errorf("Z.ai api_keys list failed (HTTP %d): %w", status, gerr)
-}
-apiKey := ""
-if list, ok := keys["data"].([]any); ok {
-	for _, item := range list {
-		if m, ok := item.(map[string]any); ok && strVal(m, "name") == glmPlanAPIKeyName {
-			apiKey = strVal(m, "apiKey")
-			break
+	keysURL := fmt.Sprintf("%s/api/biz/v1/organization/%s/projects/%s/api_keys",
+		glmBizAPIBaseURL, url.PathEscape(location.organizationID), url.PathEscape(location.projectID))
+	keys, status, gerr := getJSON(keysURL, headers)
+	if gerr != nil || status != http.StatusOK {
+		return "", "", fmt.Errorf("listing api_keys for Z.ai failed (HTTP %d): %w", status, gerr)
+	}
+	apiKey := ""
+	if list, ok := keys["data"].([]any); ok {
+		for _, item := range list {
+			if m, ok := item.(map[string]any); ok && strVal(m, "name") == glmPlanAPIKeyName {
+				apiKey = strVal(m, "apiKey")
+				break
+			}
 		}
 	}
-}
-if apiKey == "" {
-	// No coding-plan key yet: create it. The single-key reply nests under
-	// data like the rest of the business API: { code: 200, data: { apiKey, name } }.
-	created, cstatus, cerr := postJSON(keysURL, map[string]any{"name": glmPlanAPIKeyName}, headers)
-	if cerr != nil || cstatus != http.StatusOK {
-		return "", "", fmt.Errorf("Z.ai api_key create failed (HTTP %d): %w", cstatus, cerr)
+	if apiKey == "" {
+		// No coding-plan key yet: create it. The single-key reply nests under
+		// data like the rest of the business API: { code: 200, data: { apiKey, name } }.
+		created, cstatus, cerr := postJSON(keysURL, map[string]any{"name": glmPlanAPIKeyName}, headers)
+		if cerr != nil || cstatus != http.StatusOK {
+			return "", "", fmt.Errorf("creating api_key for Z.ai failed (HTTP %d): %w", cstatus, cerr)
+		}
+		createdInner, _ := created["data"].(map[string]any)
+		if createdInner != nil {
+			apiKey = strVal(createdInner, "apiKey")
+		}
 	}
-	createdInner, _ := created["data"].(map[string]any)
-	if createdInner != nil {
-		apiKey = strVal(createdInner, "apiKey")
+	if strings.TrimSpace(apiKey) == "" {
+		return "", "", fmt.Errorf("api_keys response from Z.ai is missing apiKey")
 	}
-}
-if strings.TrimSpace(apiKey) == "" {
-	return "", "", fmt.Errorf("Z.ai api_keys response is missing apiKey")
-}
 
-copied, cstatus, cerr := getJSON(keysURL+"/copy/"+url.PathEscape(apiKey), headers)
-if cerr != nil || cstatus != http.StatusOK {
-	return "", "", fmt.Errorf("Z.ai api key copy failed (HTTP %d): %w", cstatus, cerr)
-}
-copiedInner, _ := copied["data"].(map[string]any)
-if copiedInner == nil {
-	copiedInner = copied
-}
-secret := strVal(copiedInner, "secretKey")
-if strings.TrimSpace(secret) == "" {
-	return "", "", fmt.Errorf("Z.ai api key copy response is missing secretKey")
-}
-return apiKey + "." + secret, businessToken, nil
+	copied, cstatus, cerr := getJSON(keysURL+"/copy/"+url.PathEscape(apiKey), headers)
+	if cerr != nil || cstatus != http.StatusOK {
+		return "", "", fmt.Errorf("copying api key for Z.ai failed (HTTP %d): %w", cstatus, cerr)
+	}
+	copiedInner, _ := copied["data"].(map[string]any)
+	if copiedInner == nil {
+		copiedInner = copied
+	}
+	secret := strVal(copiedInner, "secretKey")
+	if strings.TrimSpace(secret) == "" {
+		return "", "", fmt.Errorf("api key copy response from Z.ai is missing secretKey")
+	}
+	return apiKey + "." + secret, businessToken, nil
 }
 
 // glmExchangeBusinessToken mirrors upstream exchangeBusinessToken: the Z.AI
@@ -250,10 +250,10 @@ func glmExchangeBusinessToken(zaiAccessToken string) (string, error) {
 	data, status, err := postJSON(glmBusinessLoginURL, map[string]any{"token": zaiAccessToken},
 		map[string]string{"Content-Type": "application/json"})
 	if err != nil {
-		return "", fmt.Errorf("Z.ai business login failed: %w", err)
+		return "", fmt.Errorf("business login for Z.ai failed: %w", err)
 	}
 	if status != http.StatusOK || !glmSuccessCode(strVal(data, "code")) {
-		return "", fmt.Errorf("Z.ai business login failed (HTTP %d): %s", status, strVal(data, "msg", "error"))
+		return "", fmt.Errorf("business login for Z.ai failed (HTTP %d): %s", status, strVal(data, "msg", "error"))
 	}
 	inner, _ := data["data"].(map[string]any)
 	token := strVal(inner, "access_token")
@@ -261,7 +261,7 @@ func glmExchangeBusinessToken(zaiAccessToken string) (string, error) {
 		token = strVal(inner, "accessToken")
 	}
 	if token == "" {
-		return "", fmt.Errorf("Z.ai business login response is missing access_token")
+		return "", fmt.Errorf("business login response from Z.ai is missing access_token")
 	}
 	return token, nil
 }
