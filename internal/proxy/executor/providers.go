@@ -693,6 +693,13 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
+	// Strict models wrap caller tool calls as execute/CALL_TOOL; hand the
+	// client back its own spelling. The bridge buffers whole SSE lines, so it
+	// may only wrap a streaming response — the non-streaming lane rewrites
+	// the re-aggregated JSON instead (bridgeOpenCodeExecuteToolCallsJSON).
+	if req.IsStream {
+		w = NewOpenCodeExecuteBridgeWriter(w)
+	}
 
 	// Upstream OpenCode free tier strictly requires stream=true.
 	// Non-streaming calls are blocked with 403 FreeTierError.
@@ -761,6 +768,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	if converted, ok := sseToOpenAIJSON(data); ok {
 		data = converted
 	}
+	data = bridgeOpenCodeExecuteToolCallsJSON(data)
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 
@@ -1577,6 +1585,11 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
+	// Same execute/CALL_TOOL bridge as the free chat lane: streaming only —
+	// the non-streaming lane rewrites the re-aggregated JSON below.
+	if req.IsStream {
+		w = NewOpenCodeExecuteBridgeWriter(w)
+	}
 
 	var reqMap map[string]any
 	if err := json.Unmarshal(body, &reqMap); err == nil {
@@ -1632,6 +1645,7 @@ func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel strin
 	if converted, ok := sseToOpenAIJSON(data); ok {
 		data = converted
 	}
+	data = bridgeOpenCodeExecuteToolCallsJSON(data)
 	return jsonResponse(req.Ctx, w, bytes.NewReader(data), req.TranslateResp, req.ResponseBuf)
 }
 

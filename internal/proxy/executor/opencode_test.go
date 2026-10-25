@@ -395,8 +395,8 @@ func TestForwardOpencode_HarnessBodyIsCanonicalizedForTheGate(t *testing.T) {
 		t.Fatal("upstream received no body")
 	}
 	tools, _ := sent["tools"].([]any)
-	if len(tools) != 4 {
-		t.Fatalf("want caller Read+Task plus injected read+shell, got %d: %s", len(tools), sentRaw)
+	if len(tools) != 12 {
+		t.Fatalf("want exactly the 12 genuine built-ins declared, got %d: %s", len(tools), sentRaw)
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
@@ -413,17 +413,27 @@ func TestForwardOpencode_HarnessBodyIsCanonicalizedForTheGate(t *testing.T) {
 			t.Errorf("tool %q reached the gate without an object schema: %s", name, sentRaw)
 		}
 	}
-	for _, want := range []string{"Read", "Task", "read", "shell"} {
+	for _, want := range []string{"edit", "glob", "grep", "question", "read", "shell", "skill", "subagent", "webfetch", "websearch", "write", "execute"} {
 		if !names[want] {
-			t.Errorf("tool %q missing from the gate request: %s", want, sentRaw)
+			t.Errorf("genuine tool %q missing from the gate request: %s", want, sentRaw)
 		}
 	}
-	choice, ok := sent["tool_choice"].(map[string]any)
-	if !ok {
-		t.Fatalf("forced tool_choice must survive on the chat lane, got %v: %s", sent["tool_choice"], sentRaw)
+	for _, banned := range []string{"Read", "Task"} {
+		if names[banned] {
+			t.Errorf("caller tool %q must not travel as a declaration: %s", banned, sentRaw)
+		}
 	}
-	if fn, _ := choice["function"].(map[string]any); fn["name"] != "Task" {
-		t.Errorf("forced choice name=%v, want Task: %s", fn["name"], sentRaw)
+	// Caller tools survive as prompt text instead of declarations.
+	system, _ := sent["messages"].([]any)[0].(map[string]any)["content"].(string)
+	if !strings.Contains(system, `"name":"Read"`) || !strings.Contains(system, `"name":"Task"`) {
+		t.Errorf("caller tools not described in the system text: %s", sentRaw)
+	}
+	if !strings.HasPrefix(system, "You are an AI agent running in OpenCode") {
+		t.Errorf("system does not start with the harness preamble: %s", sentRaw)
+	}
+	// A forced choice naming a caller tool cannot travel; the intent does.
+	if sent["tool_choice"] != "required" {
+		t.Fatalf("forced caller choice must become \"required\", got %v: %s", sent["tool_choice"], sentRaw)
 	}
 }
 
