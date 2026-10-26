@@ -597,11 +597,12 @@ func TestForwardOpencode_MuseSpark13_ResponsesRouting(t *testing.T) {
 func TestOpenCodeInferenceBase(t *testing.T) {
 	tests := []struct{ input, want string }{
 		{"https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/inference/v1"},
-		{"https://opencode.ai/zen/v1", "https://opencode.ai/inference/v1"},
-		{"http://127.0.0.1:9000/zen/v1/chat/completions", "http://127.0.0.1:9000/inference/v1"},
+		{"https://opencode.ai/zen/v1", "https://opencode.ai/inference/openai/v1"},
+		{"http://127.0.0.1:9000/zen/v1/chat/completions", "http://127.0.0.1:9000/inference/openai/v1"},
 		{"http://127.0.0.1:9000", "http://127.0.0.1:9000"},
 		{"https://relay.example/api", "https://relay.example/api"},
-		{"https://opencode.ai/inference/v1", "https://opencode.ai/inference/v1"},
+		{"https://opencode.ai/inference/openai/v1", "https://opencode.ai/inference/openai/v1"},
+		{"https://opencode.ai/inference/v1", "https://opencode.ai/inference/openai/v1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

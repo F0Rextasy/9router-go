@@ -49,7 +49,7 @@ func zenConfig(probe *zenProbe) *providers.ProviderConfig {
 		UsageURL:   providers.KnownProviders["opencode-zen"].UsageURL,
 		StaticHeaders: map[string]string{
 			"x-opencode-client": "desktop",
-			"User-Agent":        "opencode/1.18.31",
+			"User-Agent":        "opencode/1.19.4",
 		},
 	}
 }
@@ -360,7 +360,7 @@ func TestForwardOpencodeZen_KeyedLaneStaysOnZenV1(t *testing.T) {
 					AuthScheme: "bearer",
 					StaticHeaders: map[string]string{
 						"x-opencode-client": "desktop",
-						"User-Agent":        "opencode/1.18.31",
+						"User-Agent":        "opencode/1.19.4",
 					},
 				},
 				APIKey:        "sk-zen",
@@ -471,7 +471,7 @@ func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
 					AuthScheme: "bearer",
 					StaticHeaders: map[string]string{
 						"x-opencode-client": "desktop",
-						"User-Agent":        "opencode/1.18.31",
+						"User-Agent":        "opencode/1.19.4",
 					},
 				},
 				APIKey:        "sk-zen",
