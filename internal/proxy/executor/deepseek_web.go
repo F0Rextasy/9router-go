@@ -3,6 +3,8 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	json "encoding/json/v2"
 	"errors"
 	"fmt"
@@ -15,6 +17,23 @@ import (
 	"9router/proxy/internal/providers"
 	"9router/proxy/internal/proxy"
 )
+
+// deepSeekFirstMessageFingerprint is the stable identity of a conversation
+// that sent no client session id: the account plus the raw opening message.
+// Two conversations with identical openings collide, which is why the session
+// store pairs this with an idle TTL and a tail check that opens a fresh
+// session the moment the prompts diverge.
+func deepSeekFirstMessageFingerprint(messages []deepSeekMessage) string {
+	if len(messages) == 0 {
+		return ""
+	}
+	first := messages[0]
+	h := sha256.New()
+	h.Write([]byte(first.Role))
+	h.Write([]byte{0})
+	h.Write([]byte(first.Content))
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
 
 // ForwardDeepSeekWeb routes a chat completion through chat.deepseek.com's web
 // API using a browser-login credential — the port of OmniRoute's
@@ -81,7 +100,7 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 		return deepSeekAuthFailure(err, userToken)
 	}
 
-	session, err := deepSeekAcquireSession(ctx, turn, accessToken, stealth, userToken, req, prompt)
+	session, err := deepSeekAcquireSession(ctx, turn, accessToken, stealth, userToken, deepSeekFirstMessageFingerprint(envelope.Messages), req, prompt)
 	if err != nil {
 		return deepSeekAuthFailure(err, userToken)
 	}
@@ -200,13 +219,14 @@ func deepSeekAcquireSession(
 	accessToken string,
 	stealth deepSeekStealth,
 	userToken string,
+	firstMessageFingerprint string,
 	req *Request,
 	prompt string,
 ) (deepSeekSession, error) {
 	session := deepSeekSession{claim: deepSeekSessionClaim{tail: prompt}}
 
 	if stealth.persistSession {
-		session.key = deepSeekSessionKey(userToken, req.SessionID)
+		session.key = deepSeekSessionKey(userToken, req.SessionID, firstMessageFingerprint)
 		session.claim = deepSeekSessions.claim(session.key, prompt)
 	}
 

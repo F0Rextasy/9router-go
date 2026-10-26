@@ -110,7 +110,7 @@ func TestDeepSeekStealthDivergedHistoryStartsAFreshSession(t *testing.T) {
 func TestDeepSeekStealthConcurrentTurnDoesNotForkTheChain(t *testing.T) {
 	t.Cleanup(deepSeekSessions.reset)
 
-	key := deepSeekSessionKey("user-token-1", "conversation-3")
+	key := deepSeekSessionKey("user-token-1", "conversation-3", "")
 	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-pinned", "turn one", new(int64(11)))
 
 	// The first turn takes the session, which marks it busy for as long as the
@@ -138,7 +138,7 @@ func TestDeepSeekStealthConcurrentTurnDoesNotForkTheChain(t *testing.T) {
 // the store must not promise otherwise.
 func TestDeepSeekStealthSessionWithoutMessageIDIsNotPinned(t *testing.T) {
 	t.Cleanup(deepSeekSessions.reset)
-	key := deepSeekSessionKey("user-token-1", "conversation-4")
+	key := deepSeekSessionKey("user-token-1", "conversation-4", "")
 
 	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-1", "turn one", nil)
 
@@ -156,7 +156,7 @@ func TestDeepSeekStealthSessionWithoutMessageIDIsNotPinned(t *testing.T) {
 func TestDeepSeekStealthConcurrentTurnDoesNotOverwriteThePinnedEntry(t *testing.T) {
 	t.Cleanup(deepSeekSessions.reset)
 
-	key := deepSeekSessionKey("user-token-1", "conversation-11")
+	key := deepSeekSessionKey("user-token-1", "conversation-11", "")
 	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-pinned", "turn one", new(int64(11)))
 
 	held := deepSeekSessions.claim(key, "turn one\n\nturn two")
@@ -190,17 +190,64 @@ func TestDeepSeekStealthConcurrentTurnDoesNotOverwriteThePinnedEntry(t *testing.
 // the client's, and a session created for one flag answered the other with
 // an empty body; with the flag constant there is nothing left to split on.
 func TestDeepSeekSessionKeyIgnoresTheTransportMode(t *testing.T) {
-	if deepSeekSessionKey("token", "conversation") == "" {
+	if deepSeekSessionKey("token", "conversation", "") == "" {
 		t.Error("a named conversation must have a session key")
 	}
-	if deepSeekSessionKey("token", "") != "" {
-		t.Error("a turn with no client conversation id must not be pinnable")
+	if deepSeekSessionKey("token", "", "fingerprint-a") == "" {
+		t.Error("a conversation with no client id but a fingerprint must be pinnable")
 	}
-	if deepSeekSessionKey("", "conversation") != "" {
+	if deepSeekSessionKey("", "conversation", "") != "" {
 		t.Error("a turn with no credential must not be pinnable")
 	}
-	if a, b := deepSeekSessionKey("token", "conversation"), deepSeekSessionKey("token", "other"); a == b {
-		t.Error("two conversations must not share a session key")
+	if deepSeekSessionKey("token", "", "") != "" {
+		t.Error("a turn with neither client id nor fingerprint must not be pinnable")
+	}
+	if a, b := deepSeekSessionKey("token", "conversation", ""), deepSeekSessionKey("token", "other", ""); a == b {
+		t.Error("two named conversations must not share a session key")
+	}
+	if a, b := deepSeekSessionKey("token", "", "fp-a"), deepSeekSessionKey("token", "", "fp-b"); a == b {
+		t.Error("two conversations with different openings must not share a session key")
+	}
+}
+
+// A client that never sends a session id still pins, keyed by the account and
+// the opening message: without the fallback every anonymous turn would replay
+// the full transcript on a fresh session, the quadratic growth that triggers
+// account-level mutes.
+func TestDeepSeekStealthAnonymousConversationPinsOnTheOpeningMessage(t *testing.T) {
+	t.Cleanup(deepSeekSessions.reset)
+
+	key := deepSeekSessionKey("user-token-1", "", "fp-1")
+	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-anon", "turn one", new(int64(11)))
+
+	claim := deepSeekSessions.claim(key, "turn one\n\nturn two")
+	if !claim.reuse {
+		t.Fatalf("an anonymous conversation must reuse its pinned session, got %+v", claim)
+	}
+	if claim.sessionID != "session-anon" {
+		t.Errorf("sessionID = %q, want the pinned session", claim.sessionID)
+	}
+}
+
+// A pinned conversation that goes quiet ages out, so a later conversation that
+// happens to share a fallback key does not inherit its thread.
+func TestDeepSeekStealthIdleSessionExpires(t *testing.T) {
+	t.Cleanup(deepSeekSessions.reset)
+
+	key := deepSeekSessionKey("user-token-1", "", "fp-1")
+	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-old", "turn one", new(int64(11)))
+
+	deepSeekSessions.mu.Lock()
+	entry := deepSeekSessions.items[key]
+	entry.lastUsed = time.Now().Add(-deepSeekSessionIdleTTL - time.Minute)
+	deepSeekSessions.mu.Unlock()
+
+	claim := deepSeekSessions.claim(key, "turn one\n\nturn two")
+	if claim.reuse {
+		t.Fatal("an idle conversation must not reuse its stale session")
+	}
+	if !claim.pin {
+		t.Fatal("an expired entry must be replaced by what this turn establishes")
 	}
 }
 
@@ -834,8 +881,10 @@ func TestDeepSeekRetiredSessionsDrainOnTheFlush(t *testing.T) {
 	server := httptest.NewServer(upstream)
 	defer server.Close()
 
-	// Stateless turns — no client conversation id — so each session retires
-	// when its turn ends.
+	// Stateless turns — session persistence off — so each session retires
+	// when its turn ends. With persistence on the same opening message would
+	// pin the two turns to one session, which is the anti-mute behavior its
+	// own tests cover; the queue test needs sessions that actually retire.
 	for range 2 {
 		req := &Request{
 			Ctx:    context.Background(),
@@ -843,6 +892,9 @@ func TestDeepSeekRetiredSessionsDrainOnTheFlush(t *testing.T) {
 			Config: deepSeekTestConfig(server.URL),
 			APIKey: "user-token-flush",
 			Body:   deepSeekTestBody(t, "deepseek-chat", map[string]any{"role": "user", "content": "hi"}),
+			ConnData: map[string]any{
+				"persistSession": false,
+			},
 		}
 		if err := forwardTurn(t, req); err != nil {
 			t.Fatalf("turn: %v", err)
