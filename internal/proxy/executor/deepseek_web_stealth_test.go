@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	json "encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -102,6 +103,81 @@ func TestDeepSeekStealthDivergedHistoryStartsAFreshSession(t *testing.T) {
 	// diverged turn arrives in that form — the point is that it arrives whole.
 	if prompt, _ := payload["prompt"].(string); prompt != "User: something else" {
 		t.Errorf("prompt = %q, want the whole diverged prompt", prompt)
+	}
+}
+
+// A pinned session that fails at the HTTP level is a stale session — the chat
+// was deleted in the DeepSeek UI, or the upstream dropped it — and not an
+// account verdict. The turn heals the way the sibling implementation does: the
+// stale session is dropped and the completion is retried once on a fresh
+// session carrying the whole prompt, and the client never hears about it.
+func TestDeepSeekStealthStaleSessionHealsWithAFreshSession(t *testing.T) {
+	t.Cleanup(deepSeekSessions.reset)
+	upstream := newDeepSeekFakeUpstream(t, deepSeekTurnFrames(88, "the answer"))
+	server := httptest.NewServer(upstream)
+	defer server.Close()
+
+	first := deepSeekTestBody(t, "deepseek-chat", map[string]any{"role": "user", "content": "first question"})
+	if err := forwardTurn(t, deepSeekTurnRequest(server, "user-token-heal", "conversation-heal", first)); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	// The pinned session is now dead upstream: the next completion on it
+	// answers HTTP 500. The turn must retry on a session it opened itself.
+	upstream.mu.Lock()
+	upstream.failCompletions = 1
+	upstream.mu.Unlock()
+
+	second := deepSeekTestBody(t, "deepseek-chat",
+		map[string]any{"role": "user", "content": "first question"},
+		map[string]any{"role": "assistant", "content": "first answer"},
+		map[string]any{"role": "user", "content": "second question"})
+	if err := forwardTurn(t, deepSeekTurnRequest(server, "user-token-heal", "conversation-heal", second)); err != nil {
+		t.Fatalf("healing turn: %v", err)
+	}
+
+	if got := upstream.createdSessions; got != 2 {
+		t.Errorf("sessions created = %d, want 2: the healing turn must open a fresh session", got)
+	}
+	// One completion for the first turn, then the failed attempt plus the
+	// healing retry for the second.
+	if got := upstream.countCalls(deepSeekCompletionPath); got != 3 {
+		t.Errorf("completion calls = %d, want 3: the stale session is retried once, not repeatedly", got)
+	}
+
+	// The retry carried the whole prompt on a fresh thread, not the tail the
+	// dead chain would have dictated.
+	payload := upstream.body(t, deepSeekCompletionPath)
+	if got, _ := payload["chat_session_id"].(string); got != "session-2" {
+		t.Errorf("chat_session_id = %v, want the fresh session-2", got)
+	}
+	if payload["parent_message_id"] != nil {
+		t.Errorf("parent_message_id = %v, want null on the healing thread", payload["parent_message_id"])
+	}
+	if prompt, _ := payload["prompt"].(string); !strings.Contains(prompt, "second question") || !strings.Contains(prompt, "first question") {
+		t.Errorf("the healing turn must re-send the whole prompt, got:\n%s", prompt)
+	}
+
+	// The healed session is what the conversation is pinned to now: the next
+	// turn continues it instead of starting over.
+	third := deepSeekTestBody(t, "deepseek-chat",
+		map[string]any{"role": "user", "content": "first question"},
+		map[string]any{"role": "assistant", "content": "first answer"},
+		map[string]any{"role": "user", "content": "second question"},
+		map[string]any{"role": "assistant", "content": "the answer"},
+		map[string]any{"role": "user", "content": "third question"})
+	if err := forwardTurn(t, deepSeekTurnRequest(server, "user-token-heal", "conversation-heal", third)); err != nil {
+		t.Fatalf("third turn: %v", err)
+	}
+	if got := upstream.createdSessions; got != 2 {
+		t.Errorf("sessions created = %d, want 2: the healed session must stay pinned", got)
+	}
+	payload = upstream.body(t, deepSeekCompletionPath)
+	if got, _ := payload["chat_session_id"].(string); got != "session-2" {
+		t.Errorf("chat_session_id = %v, want the healed session-2", got)
+	}
+	if got, _ := payload["parent_message_id"].(float64); int64(got) != 88 {
+		t.Errorf("parent_message_id = %v, want 88 (the id the upstream named on the healed thread)", payload["parent_message_id"])
 	}
 }
 
@@ -248,6 +324,76 @@ func TestDeepSeekStealthIdleSessionExpires(t *testing.T) {
 	}
 	if !claim.pin {
 		t.Fatal("an expired entry must be replaced by what this turn establishes")
+	}
+}
+
+// A session a turn is mid-flight on is never dropped, however long that turn
+// runs: the idle TTL is for conversations that went quiet, and evicting a busy
+// entry would let the committing turn pin a chain over this one's session.
+func TestDeepSeekStealthBusySessionSurvivesTheIdleTTL(t *testing.T) {
+	t.Cleanup(deepSeekSessions.reset)
+
+	key := deepSeekSessionKey("user-token-1", "conversation-ttl", "")
+	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-pinned", "turn one", new(int64(11)))
+
+	deepSeekSessions.mu.Lock()
+	entry := deepSeekSessions.items[key]
+	entry.busy = true
+	entry.lastUsed = time.Now().Add(-deepSeekSessionIdleTTL - time.Minute)
+	deepSeekSessions.mu.Unlock()
+
+	claim := deepSeekSessions.claim(key, "turn one\n\nturn two")
+	if claim.reuse || claim.pin {
+		t.Fatalf("a busy session must be left to its holding turn, got %+v", claim)
+	}
+	if !deepSeekSessions.holds(key, "session-pinned") {
+		t.Fatal("the busy entry must survive the claim: its turn is still building it")
+	}
+
+	// The holding turn ends and settles: its commit refreshes the entry, and
+	// the chain must still be resumable — which is what eviction here would
+	// have destroyed.
+	deepSeekSessions.commit(deepSeekSessionClaim{pin: true}, key, "session-pinned", "turn one\n\nturn two", new(int64(12)))
+	if claim := deepSeekSessions.claim(key, "turn one\n\nturn two\n\nturn three"); !claim.reuse {
+		t.Fatalf("the settled session must still be reusable, got %+v", claim)
+	}
+}
+
+// The anonymous fallback key is the conversation's first USER message, never
+// the system prompt: a client that leads every conversation with the same
+// system message would otherwise put all of its conversations on one key,
+// where each divergent turn evicts the other's chain and every turn falls
+// back to a fresh session carrying the full transcript.
+func TestDeepSeekFirstMessageFingerprintSkipsTheSystemPrompt(t *testing.T) {
+	system := map[string]any{"role": "system", "content": "you are a coding agent"}
+	body := func(messages ...map[string]any) []deepSeekMessage {
+		t.Helper()
+		var decoded struct {
+			Messages []deepSeekMessage `json:"messages"`
+		}
+		raw, err := json.Marshal(map[string]any{"messages": messages})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return decoded.Messages
+	}
+
+	sameOpening := deepSeekFirstMessageFingerprint(body(system, map[string]any{"role": "user", "content": "hi"}))
+	otherOpening := deepSeekFirstMessageFingerprint(body(system, map[string]any{"role": "user", "content": "write tests"}))
+	if sameOpening == "" || otherOpening == "" {
+		t.Fatal("a conversation with a user message must produce a fingerprint")
+	}
+	if sameOpening == otherOpening {
+		t.Error("two conversations differing only after the system prompt must not share a fallback key")
+	}
+	if again := deepSeekFirstMessageFingerprint(body(system, map[string]any{"role": "user", "content": "hi"})); again != sameOpening {
+		t.Error("identical openings must share the fallback key")
+	}
+	if got := deepSeekFirstMessageFingerprint(body(system, map[string]any{"role": "assistant", "content": "only an assistant turn"})); got != "" {
+		t.Errorf("a conversation with no user message must not be pinnable, got %q", got)
 	}
 }
 

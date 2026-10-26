@@ -137,18 +137,21 @@ func (s *deepSeekSessionStore) claim(key, fullPrompt string) deepSeekSessionClai
 	defer s.mu.Unlock()
 
 	entry, ok := s.items[key]
+	if ok && entry.busy {
+		// Another turn of this conversation is mid-flight. This turn gets its
+		// own session and must not touch the pinned entry: writing it would
+		// overwrite the chain the other turn is still building. The busy check
+		// comes before the idle TTL for the same reason — an entry a turn is
+		// still building must survive however long that turn runs, or the
+		// committing turn would pin a chain over this one's session.
+		return deepSeekSessionClaim{tail: fullPrompt}
+	}
 	if ok && time.Since(entry.lastUsed) > deepSeekSessionIdleTTL {
 		// The conversation went quiet and the chain is stale: a fallback key
 		// may now belong to a different conversation, so it starts fresh
 		// instead of inheriting the old thread.
 		delete(s.items, key)
 		ok = false
-	}
-	if ok && entry.busy {
-		// Another turn of this conversation is mid-flight. This turn gets its
-		// own session and must not touch the pinned entry: writing it would
-		// overwrite the chain the other turn is still building.
-		return deepSeekSessionClaim{tail: fullPrompt}
 	}
 	if !ok {
 		return deepSeekSessionClaim{tail: fullPrompt, pin: true}
