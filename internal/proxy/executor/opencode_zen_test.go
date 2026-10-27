@@ -447,8 +447,8 @@ func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
 		want  string
 		reply func(w http.ResponseWriter)
 	}{
-		{"deepseek-v4-flash-free", "/inference/v1/chat/completions", zenChatReply},
-		{"muse-spark-1.3-contributor-free", "/inference/v1/responses", zenResponsesReply},
+		{"deepseek-v4-flash-free", "/inference/openai/v1/chat/completions", zenChatReply},
+		{"muse-spark-1.3-contributor-free", "/inference/openai/v1/responses", zenResponsesReply},
 	}
 	for _, tt := range tests {
 		t.Run(tt.model, func(t *testing.T) {
@@ -517,7 +517,7 @@ func TestForwardZenMessages_FreeLaneTakesTheStealthForwarder(t *testing.T) {
 	if err := forwardZenMessages(rec, req, "claude-sonnet-4-6-free", true, providers.FormatClaude); err != nil {
 		t.Fatalf("forwardZenMessages: %v", err)
 	}
-	if probe.path != "/inference/v1/messages" {
+	if probe.path != "/inference/openai/v1/messages" {
 		t.Errorf("expected the inference messages lane, got %q", probe.path)
 	}
 	if probe.auth != "Bearer public" {
