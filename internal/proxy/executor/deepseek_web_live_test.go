@@ -71,6 +71,12 @@ func TestLiveDeepSeekWebOneTurn(t *testing.T) {
 	}
 	// The word is matched across chunks: a stream splits it arbitrarily, and
 	// the point is what the model said, not how the fragments fell.
+	// The no-tools path is the one the leak was reported on: this model writes
+	// its native DSML even when the request declared no tools, and the answer
+	// must never carry that markup to the client.
+	if strings.Contains(answer, "DSML") {
+		t.Errorf("DSML markup leaked into a no-tools answer:\n%s", tailFor(answer, 400))
+	}
 	if !strings.Contains(deepSeekStreamedText(answer), "pong") {
 		t.Errorf("the answer is missing the expected word; body tail: %s", tailFor(answer, 400))
 	}
