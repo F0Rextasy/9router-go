@@ -271,6 +271,7 @@ func forwardZenChat(w http.ResponseWriter, req *Request, cleanModel, sourceForma
 	var zenToolNameMap map[string]string
 	if free {
 		body, zenToolNameMap = translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+		body = translator.ApplyFingerprintSystemPrompt(body)
 		if req.IsStream {
 			w = NewOpenCodeExecuteBridgeWriter(w)
 		}
@@ -358,6 +359,7 @@ func forwardZenResponses(w http.ResponseWriter, req *Request, cleanModel, source
 	var toolNameMap map[string]string
 	if free {
 		body, toolNameMap = translator.ConcealOpenCodeV2FingerprintTools(body, true, isOpenCodeAutoToolChoiceModel(cleanModel))
+		body = translator.ApplyFingerprintSystemPrompt(body)
 	} else {
 		body, toolNameMap = translator.ConcealFingerprintTools(body)
 	}

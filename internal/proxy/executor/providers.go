@@ -632,6 +632,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 		// variants from Claude Code CLI are renamed here and restored on the
 		// response (translator.ConcealFingerprintTools).
 		transformedBody, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(transformedBody, true, isOpenCodeAutoToolChoiceModel(cleanModel))
+		transformedBody = translator.ApplyFingerprintSystemPrompt(transformedBody)
 		req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 		w = NewToolNameRestoringWriter(w, toolNameMap)
 
@@ -691,6 +692,7 @@ func ForwardOpencode(w http.ResponseWriter, req *Request) error {
 	req.LiftReasoningAliases = true
 	// opencode Chat Completions path: same conceal + restore of tool names.
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+	body = translator.ApplyFingerprintSystemPrompt(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	// Strict models wrap caller tool calls as execute/CALL_TOOL; hand the
@@ -1590,6 +1592,7 @@ func opencodeGoInferenceBase(base string) string {
 func forwardOpencodeGoFree(w http.ResponseWriter, req *Request, cleanModel string) error {
 	body := InjectReasoningContent(req.Body, "opencode-go")
 	body, toolNameMap := translator.ConcealOpenCodeV2FingerprintTools(body, false, isOpenCodeAutoToolChoiceModel(cleanModel))
+	body = translator.ApplyFingerprintSystemPrompt(body)
 	req.Ctx = translator.WithToolNameMap(req.Ctx, toolNameMap)
 	w = NewToolNameRestoringWriter(w, toolNameMap)
 	// Same execute/CALL_TOOL bridge as the free chat lane: streaming only —
