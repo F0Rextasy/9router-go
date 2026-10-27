@@ -312,6 +312,13 @@ func (s *deepSeekDSMLScrubber) scrub(tail string) (string, int) {
 		case closeAt != nil:
 			at = closeAt
 		default:
+			// A tail that ends in the middle of a possible tag — a lone `<`,
+			// `<｜` — must be held back, not emitted, or the first bytes of
+			// the markup leak through as text while the rest is skipped. The
+			// next fragment decides whether it was markup or prose.
+			if cut := dsmlTagPrefixCut(tail[off:]); cut >= 0 {
+				return out.String(), off + cut
+			}
 			out.WriteString(tail[off:])
 			return out.String(), len(tail)
 		}
@@ -329,6 +336,74 @@ func (s *deepSeekDSMLScrubber) scrub(tail string) (string, int) {
 		off += tag.end
 	}
 	return out.String(), off
+}
+
+// deepSeekDSMLTagPrefix reports whether s is a prefix of a DSML tag opening or
+// closing pattern — a lone `<`, or `<` followed by up to two pipe bars and
+// whitespace. While the tail ends in one of these, the scrubber holds those
+// bytes back instead of emitting them.
+func deepSeekDSMLTagPrefix(s string) bool {
+	if !strings.HasPrefix(s, "<") {
+		return false
+	}
+	rest := s[1:]
+	bars := 0
+	for bars < 2 && len(rest) > 0 && (rest[0] == '|' || strings.HasPrefix(rest, "\uFF5C")) {
+		if rest[0] == '|' {
+			rest = rest[1:]
+		} else {
+			rest = rest[len("\uFF5C"):]
+		}
+		bars++
+	}
+	if bars == 0 && len(rest) > 0 {
+		return false
+	}
+	rest = trimDSMLSpace(rest, 4)
+	const dsml = "DSML"
+	n := len(rest)
+	if n > len(dsml) {
+		n = len(dsml)
+	}
+	if n > 0 && rest[:n] != dsml[:n] {
+		return false
+	}
+	rest = rest[n:]
+	if n < len(dsml) {
+		return true
+	}
+	rest = trimDSMLSpace(rest, 4)
+	bars = 0
+	for bars < 2 && len(rest) > 0 && (rest[0] == '|' || strings.HasPrefix(rest, "\uFF5C")) {
+		if rest[0] == '|' {
+			rest = rest[1:]
+		} else {
+			rest = rest[len("\uFF5C"):]
+		}
+		bars++
+	}
+	return len(rest) == 0
+}
+
+func trimDSMLSpace(s string, max int) string {
+	n := 0
+	for n < max && len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r') {
+		s = s[1:]
+		n++
+	}
+	return s
+}
+
+// dsmlTagPrefixCut returns the offset of the last `<` in s that starts a
+// yet-incomplete DSML tag, or -1 when none does. Only a trailing partial tag
+// is held; a `<` that is already decided to be prose is emitted.
+func dsmlTagPrefixCut(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '<' && deepSeekDSMLTagPrefix(s[i:]) {
+			return i
+		}
+	}
+	return -1
 }
 
 // deepSeekDSMLTag is one complete DSML tag found in text.

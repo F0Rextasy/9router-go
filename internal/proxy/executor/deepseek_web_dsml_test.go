@@ -437,3 +437,27 @@ func TestDeepSeekScrubberDropsBlockAcrossFrames(t *testing.T) {
 		t.Fatalf("prose around the block was lost:\n%q", got)
 	}
 }
+
+// TestDeepSeekScrubberHoldsPartialTagFrames feeds the same block one rune at
+// a time. The upstream stream often delivers one character per frame, so a
+// tag arrives as `<`, then `<｜`, then `<｜｜` — the scrubber must hold those
+// prefixes instead of emitting them, or the first bytes of the markup leak as
+// text.
+func TestDeepSeekScrubberHoldsPartialTagFrames(t *testing.T) {
+	answer := "Awal\n" + leakedCronjobBlock + "\nAkhir"
+	var scrubber deepSeekDSMLScrubber
+	var out strings.Builder
+	var buf string
+	for _, r := range answer {
+		buf += string(r)
+		clean, n := scrubber.scrub(buf)
+		out.WriteString(clean)
+		buf = buf[n:]
+	}
+	if buf != "" {
+		t.Fatalf("%d bytes were never consumed", len(buf))
+	}
+	if got := out.String(); got != "Awal\n\nAkhir" {
+		t.Fatalf("scrubbed = %q, want %q", got, "Awal\n\nAkhir")
+	}
+}
