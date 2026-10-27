@@ -57,6 +57,11 @@ var (
 	deepSeekDSMLCallsClose     = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*calls\s*>`)
 	deepSeekDSMLInvokeClose    = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*invoke\s*>`)
 	deepSeekDSMLParameterClose = regexp.MustCompile(`</?[｜|]{1,2}\s*DSML\s*[｜|]{1,2}\s*parameter\s*>`)
+	// Any opening or closing DSML tag, whatever element it names. The scrubber
+	// uses these to walk an answer and drop every piece of markup, whether the
+	// element formed a complete block or not.
+	deepSeekDSMLAnyOpen  = regexp.MustCompile(`<[｜|]{1,2}\s*DSML\s*[｜|]{1,2}`)
+	deepSeekDSMLAnyClose = regexp.MustCompile(`</[｜|]{1,2}\s*DSML\s*[｜|]{1,2}`)
 )
 
 // deepSeekHasDSML reports whether an answer contains the namespace at all.
@@ -261,44 +266,126 @@ func deepSeekDSMLValue(body string) string {
 	return string(encoded)
 }
 
-// deepSeekStripDSML removes a DSML element from an answer.
-//
-// Used wherever the markup could otherwise reach the user: a block that could not
-// be turned into a call, and the text around a block that could.
-//
-// The whole element goes, from its opening tag to its terminator, because what
-// lies between them is markup too — stripping only the tags would leave the
-// parameter bodies behind, so `https://wttr.in/Jakarta` would appear as prose the
-// model never wrote. An element that was never closed is treated as running to
-// the end of the answer: the model was cut off mid-call, and everything after the
-// marker is unfinished markup rather than a sentence.
-func deepSeekStripDSML(text string) string {
-	for _, element := range []struct {
-		open  *regexp.Regexp
-		close *regexp.Regexp
-	}{
-		{deepSeekDSMLCallsOpen, deepSeekDSMLCallsClose},
-		{deepSeekDSMLInvokeOpen, deepSeekDSMLInvokeClose},
-		{deepSeekDSMLParameterOpen, deepSeekDSMLParameterClose},
-	} {
-		openAt := element.open.FindStringIndex(text)
-		if openAt == nil {
+// deepSeekDSMLScrubber strips DSML markup out of a character stream as it
+// flows past, keeping only the prose around it. The streaming executor feeds it
+// each newly arrived tail of the answer; the scrubber consumes the longest
+// prefix whose content is decided and holds back anything that could still be
+// part of an unfinished tag or block.
+type deepSeekDSMLScrubber struct {
+	// depth counts unclosed DSML elements while standing inside a block.
+	// Positive means the current position is markup being dropped.
+	depth int
+}
+
+// scrub consumes as much of tail as is decidable and returns the clean text
+// along with the number of bytes consumed. Bytes that may belong to an
+// unfinished DSML tag or block are left unconsumed for the next call.
+func (s *deepSeekDSMLScrubber) scrub(tail string) (string, int) {
+	var out strings.Builder
+	off := 0
+	for off < len(tail) {
+		if s.depth > 0 {
+			tag, ok := deepSeekNextDSMLTag(tail[off:])
+			if !ok {
+				return out.String(), off
+			}
+			off += tag.end
+			s.depth += tag.openDelta
+			if s.depth < 0 {
+				s.depth = 0
+			}
 			continue
 		}
-		// The search for the terminator begins after the opening tag. Starting at
-		// the element itself would match that very tag — the close pattern admits
-		// a missing slash — and truncate the element at its own first tag,
-		// leaving the rest of the markup in place.
-		searchFrom := openAt[1]
-		if tagEnd := strings.Index(text[searchFrom:], ">"); tagEnd >= 0 {
-			searchFrom += tagEnd + 1
+
+		openAt := deepSeekDSMLAnyOpen.FindStringIndex(tail[off:])
+		closeAt := deepSeekDSMLAnyClose.FindStringIndex(tail[off:])
+		var at []int
+		switch {
+		case openAt != nil && closeAt != nil:
+			if openAt[0] < closeAt[0] {
+				at = openAt
+			} else {
+				at = closeAt
+			}
+		case openAt != nil:
+			at = openAt
+		case closeAt != nil:
+			at = closeAt
+		default:
+			out.WriteString(tail[off:])
+			return out.String(), len(tail)
 		}
-		if end := element.close.FindStringIndex(text[searchFrom:]); end != nil {
-			return strings.TrimSpace(text[:openAt[0]] + text[searchFrom+end[1]:])
+
+		out.WriteString(tail[off : off+at[0]])
+		off += at[0]
+		tag, ok := deepSeekNextDSMLTag(tail[off:])
+		if !ok {
+			// The tag is not complete yet; hold from its start.
+			return out.String(), off
 		}
-		return strings.TrimSpace(text[:openAt[0]])
+		if tag.openDelta > 0 {
+			s.depth = 1
+		}
+		off += tag.end
 	}
-	return text
+	return out.String(), off
+}
+
+// deepSeekDSMLTag is one complete DSML tag found in text.
+type deepSeekDSMLTag struct {
+	openDelta int // +1 opening, -1 closing
+	end       int // offset just past the tag's `>`
+}
+
+// deepSeekNextDSMLTag finds the next complete DSML tag — open or close — in
+// text. ok is false when no complete tag exists: either none at all, or one
+// whose `>` has not arrived yet.
+func deepSeekNextDSMLTag(text string) (deepSeekDSMLTag, bool) {
+	open := deepSeekDSMLAnyOpen.FindStringIndex(text)
+	close := deepSeekDSMLAnyClose.FindStringIndex(text)
+	var start int
+	switch {
+	case open != nil && close != nil:
+		if open[0] < close[0] {
+			start = open[0]
+		} else {
+			start = close[0]
+		}
+	case open != nil:
+		start = open[0]
+	case close != nil:
+		start = close[0]
+	default:
+		return deepSeekDSMLTag{}, false
+	}
+	tagEnd := strings.Index(text[start:], ">")
+	if tagEnd < 0 {
+		return deepSeekDSMLTag{}, false
+	}
+	openDelta := 1
+	if len(text) > start+1 && text[start+1] == '/' {
+		openDelta = -1
+	}
+	return deepSeekDSMLTag{openDelta: openDelta, end: start + tagEnd + 1}, true
+}
+
+// deepSeekStripDSML removes every DSML element from an answer.
+//
+// Used wherever the markup could otherwise reach the user: a block that could
+// not be turned into a call, and the text around a block that could.
+//
+// Everything belonging to the markup goes — tags, parameter bodies, stray
+// closers — and the prose around it survives. A block that was never closed is
+// treated as running to the end of the answer: the model was cut off mid-call,
+// and everything after the marker is unfinished markup rather than a sentence.
+func deepSeekStripDSML(text string) string {
+	if !deepSeekHasDSML(text) {
+		return text
+	}
+	var scrubber deepSeekDSMLScrubber
+	clean, _ := scrubber.scrub(text)
+	// The element is gone, and with it the whitespace that hugged it.
+	return strings.TrimSpace(clean)
 }
 
 // deepSeekDSMLInvokeCount reports how many invokes an answer carries, for the log.
