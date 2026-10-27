@@ -796,6 +796,28 @@ func opencodeInferenceBase(base string) string {
 	}
 }
 
+// opencodeMessagesInferenceBase keeps a zen-layout base URL on the legacy
+// /inference/v1 prefix: the v2 gate's /inference/openai/v1 surface has no
+// /messages route (404), while the legacy prefix still serves Claude
+// Messages. Mirrors opencodeInferenceBase, keyed off the prefix rather than
+// the host.
+func opencodeMessagesInferenceBase(base string) string {
+	base = strings.TrimRight(base, "/")
+	base = strings.TrimSuffix(base, "/chat/completions")
+	base = strings.TrimSuffix(base, "/messages")
+	base = strings.TrimSuffix(base, "/responses")
+	switch {
+	case strings.HasSuffix(base, "/zen/v1"):
+		return strings.TrimSuffix(base, "/zen/v1") + "/inference/v1"
+	case strings.HasSuffix(base, "/inference/openai/v1"):
+		return strings.TrimSuffix(base, "/inference/openai/v1") + "/inference/v1"
+	case strings.HasSuffix(base, "/inference/v1"):
+		return base
+	default:
+		return base
+	}
+}
+
 func opencodeChatURL(base string) string {
 	base = strings.TrimRight(base, "/")
 	if !strings.HasSuffix(base, "/chat/completions") {

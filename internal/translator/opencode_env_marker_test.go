@@ -8,12 +8,12 @@ import (
 
 func TestApplyFingerprintSystemPrompt(t *testing.T) {
 	t.Run("upgrades Anthropic system string", func(t *testing.T) {
-		body := []byte(`{"system":"You are an assistant.\n<env>\n  Working directory: /workspace\n</env>"}`)
+		body := []byte(`{"system":"You are an assistant.\n<env>\n  Working directory: /tmp/ocprobe\n</env>"}`)
 		out := ApplyFingerprintSystemPrompt(body)
 		var m map[string]any
 		_ = json.Unmarshal(out, &m)
 		sys := m["system"].(string)
-		if !strings.Contains(sys, "Workspace root folder: /workspace") {
+		if !strings.Contains(sys, "Workspace root folder: /tmp/ocprobe") {
 			t.Errorf("expected upgraded env block with workspace root folder, got %s", sys)
 		}
 		if !strings.Contains(sys, "You are an assistant.") {

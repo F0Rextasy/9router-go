@@ -499,10 +499,12 @@ func TestForwardOpencodeZen_FreeModelTakesInferenceGate(t *testing.T) {
 }
 
 // A free-tier id on the messages lane travels through the same stealth-capable
-// forwarder as the other free lanes: the /inference/v1 prefix, the public
-// credential, the v2 cli identity, and the read/shell fingerprint. It used to
-// take the plain DoRequest path, which the gate refuses on a direct dial — the
-// request only passed when an edge relay made the call.
+// forwarder as the other free lanes: the legacy /inference/v1 prefix — the v2
+// gate's /inference/openai/v1 surface has no /messages route (404), so only
+// the legacy prefix serves this lane — the public credential, the v2 cli
+// identity, and the read/shell fingerprint. It used to take the plain
+// DoRequest path, which the gate refuses on a direct dial — the request only
+// passed when an edge relay made the call.
 func TestForwardZenMessages_FreeLaneTakesTheStealthForwarder(t *testing.T) {
 	probe := newZenProbe(t, zenMessagesReply)
 	rec := httptest.NewRecorder()
@@ -517,8 +519,8 @@ func TestForwardZenMessages_FreeLaneTakesTheStealthForwarder(t *testing.T) {
 	if err := forwardZenMessages(rec, req, "claude-sonnet-4-6-free", true, providers.FormatClaude); err != nil {
 		t.Fatalf("forwardZenMessages: %v", err)
 	}
-	if probe.path != "/inference/openai/v1/messages" {
-		t.Errorf("expected the inference messages lane, got %q", probe.path)
+	if probe.path != "/inference/v1/messages" {
+		t.Errorf("expected the legacy inference messages lane, got %q", probe.path)
 	}
 	if probe.auth != "Bearer public" {
 		t.Errorf("expected the public credential, got %q", probe.auth)

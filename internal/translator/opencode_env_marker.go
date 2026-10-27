@@ -7,8 +7,10 @@ import (
 )
 
 // OpenCodeEnvMarker is the mandatory environment block OpenCode v2 free-tier
-// checks in agent system prompts.
-const OpenCodeEnvMarker = "<env>\n  Working directory: /workspace\n  Workspace root folder: /workspace\n</env>"
+// checks in agent system prompts. The paths mirror the captured CLI harness
+// preamble (opencode_free_harness.go) — the only env shape measured to pass
+// the gate — so the marker and the preamble never disagree.
+const OpenCodeEnvMarker = "<env>\n  Working directory: /tmp/ocprobe\n  Workspace root folder: /tmp/ocprobe\n</env>"
 
 var (
 	envBlockRegex   = regexp.MustCompile(`(?s)<env>(.*?)</env>`)
@@ -40,22 +42,22 @@ func upgradeEnvBlock(text string) string {
 
 		var upgraded string
 		if !hasWorkdir && !hasRoot {
-			upgraded = "\n  Working directory: /workspace\n  Workspace root folder: /workspace\n"
+			upgraded = "\n  Working directory: /tmp/ocprobe\n  Workspace root folder: /tmp/ocprobe\n"
 		} else if !hasRoot {
 			if envWorkdirRegex.MatchString(inner) {
 				upgraded = envWorkdirRegex.ReplaceAllStringFunc(inner, func(line string) string {
-					return line + "\n  Workspace root folder: /workspace"
+					return line + "\n  Workspace root folder: /tmp/ocprobe"
 				})
 			} else {
-				upgraded = strings.TrimRight(inner, " \t\r\n") + "\n  Workspace root folder: /workspace\n"
+				upgraded = strings.TrimRight(inner, " \t\r\n") + "\n  Workspace root folder: /tmp/ocprobe\n"
 			}
 		} else if !hasWorkdir {
 			if envRootRegex.MatchString(inner) {
 				upgraded = envRootRegex.ReplaceAllStringFunc(inner, func(line string) string {
-					return "  Working directory: /workspace\n" + line
+					return "  Working directory: /tmp/ocprobe\n" + line
 				})
 			} else {
-				upgraded = "\n  Working directory: /workspace\n" + inner
+				upgraded = "\n  Working directory: /tmp/ocprobe\n" + inner
 			}
 		}
 		return "<env>" + upgraded + "</env>"

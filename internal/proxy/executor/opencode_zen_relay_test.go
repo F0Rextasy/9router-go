@@ -65,6 +65,13 @@ func TestZenRelayPath(t *testing.T) {
 			lane:  zenResponsesPath,
 			want:  "/inference/openai/v1/responses",
 		},
+		{
+			name:  "a free-tier messages model keeps the legacy inference prefix",
+			heads: map[string]string{"x-relay-target": "https://opencode.ai"},
+			model: "claude-sonnet-4-6-free",
+			lane:  zenMessagesPath,
+			want:  "/inference/v1/messages",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

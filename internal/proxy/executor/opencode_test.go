@@ -613,6 +613,26 @@ func TestOpenCodeInferenceBase(t *testing.T) {
 	}
 }
 
+// The messages lane keeps the legacy prefix: the v2 gate's
+// /inference/openai/v1 surface has no /messages route (404).
+func TestOpenCodeMessagesInferenceBase(t *testing.T) {
+	tests := []struct{ input, want string }{
+		{"https://opencode.ai/zen/v1/chat/completions", "https://opencode.ai/inference/v1"},
+		{"https://opencode.ai/zen/v1/messages", "https://opencode.ai/inference/v1"},
+		{"https://opencode.ai/inference/openai/v1", "https://opencode.ai/inference/v1"},
+		{"https://opencode.ai/inference/v1", "https://opencode.ai/inference/v1"},
+		{"http://127.0.0.1:9000", "http://127.0.0.1:9000"},
+		{"https://relay.example/api", "https://relay.example/api"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := opencodeMessagesInferenceBase(tt.input); got != tt.want {
+				t.Errorf("opencodeMessagesInferenceBase(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsOpencodeResponsesModel(t *testing.T) {
 	// Ports the upstream free-executor lane rule (isResponsesModel = curated
 	// set plus isMuseSparkModel /^muse[-_]?spark(?:$|[-_:.\s])/i).
