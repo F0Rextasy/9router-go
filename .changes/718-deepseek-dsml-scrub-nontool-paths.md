@@ -14,6 +14,13 @@ markup — exactly what a cronjob report showed in a Telegram group.
   whole malformed block — missing calls opener, unbalanced closers, stray tags —
   instead of one element per pass, which left orphan tags behind.
 
+- The streaming scrubber holds partial tags: the upstream delivers one
+  character per frame, so a tag arrives as `<`, then `<｜`, then `<｜｜`.
+  Those prefixes are kept back until the next fragment decides whether they
+  are markup or prose.
+
 Verified by regression tests pinned to the two leaked shapes (missing calls
 opener; mixed bar spellings with an extra invoke closer) across the strip,
-streaming, and non-streaming paths.
+streaming, and non-streaming paths, plus live end-to-end turns against
+chat.deepseek.com with a real credential — including one- and two-call tool
+turns.
