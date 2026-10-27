@@ -181,6 +181,45 @@ func TestDeepSeekStealthStaleSessionHealsWithAFreshSession(t *testing.T) {
 	}
 }
 
+// An auth failure on a reused session is a rejected token, not a stale
+// session: the access token was freshly exchanged and the upstream refused
+// it, so a new session cannot help and healing would only add more calls to
+// the account the site is refusing. The failure surfaces as before.
+func TestDeepSeekStealthAuthFailureIsNotHealed(t *testing.T) {
+	t.Cleanup(deepSeekSessions.reset)
+	upstream := newDeepSeekFakeUpstream(t, deepSeekTurnFrames(77, "the answer"))
+	server := httptest.NewServer(upstream)
+	defer server.Close()
+
+	first := deepSeekTestBody(t, "deepseek-chat", map[string]any{"role": "user", "content": "first question"})
+	if err := forwardTurn(t, deepSeekTurnRequest(server, "user-token-auth", "conversation-auth", first)); err != nil {
+		t.Fatalf("first turn: %v", err)
+	}
+
+	upstream.mu.Lock()
+	upstream.failCompletions = 1
+	upstream.failStatus = http.StatusUnauthorized
+	upstream.mu.Unlock()
+
+	second := deepSeekTestBody(t, "deepseek-chat",
+		map[string]any{"role": "user", "content": "first question"},
+		map[string]any{"role": "assistant", "content": "first answer"},
+		map[string]any{"role": "user", "content": "second question"})
+	err := forwardTurn(t, deepSeekTurnRequest(server, "user-token-auth", "conversation-auth", second))
+	if err == nil {
+		t.Fatal("a rejected token must surface as an error, not be healed")
+	}
+	if !isDeepSeekAuthError(err) {
+		t.Fatalf("err = %v, want an auth failure the cooldown path can park", err)
+	}
+	if got := upstream.createdSessions; got != 1 {
+		t.Errorf("sessions created = %d, want 1: a dead token must not be given a fresh session", got)
+	}
+	if got := upstream.countCalls(deepSeekCompletionPath); got != 2 {
+		t.Errorf("completion calls = %d, want 2: the refused turn must not be retried", got)
+	}
+}
+
 // Two turns of one conversation fired at once must not share a session: the
 // second would fork the parent chain. The one that loses the race gets its own
 func TestDeepSeekStealthConcurrentTurnDoesNotForkTheChain(t *testing.T) {

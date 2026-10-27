@@ -59,9 +59,11 @@ type deepSeekFakeUpstream struct {
 	createdSessions int
 
 	// failCompletions makes the next N completion calls answer with an HTTP
-	// 500 instead of the event stream — the shape of a stale upstream session
-	// that a healing turn is expected to retry on a fresh one.
+	// error instead of the event stream — the shape of a stale upstream session
+	// that a healing turn is expected to retry on a fresh one. failStatus picks
+	// the status those failures carry; zero means 500.
 	failCompletions int
+	failStatus      int
 }
 
 // countCalls reports how many requests the upstream served on path.
@@ -182,9 +184,14 @@ func (f *deepSeekFakeUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		if failing {
 			f.failCompletions--
 		}
+		failStatus := f.failStatus
 		f.mu.Unlock()
 		if failing {
-			w.WriteHeader(http.StatusInternalServerError)
+			status := failStatus
+			if status == 0 {
+				status = http.StatusInternalServerError
+			}
+			w.WriteHeader(status)
 			_ = json.MarshalWrite(w, map[string]any{"code": 1, "msg": "chat session is gone"})
 			return
 		}

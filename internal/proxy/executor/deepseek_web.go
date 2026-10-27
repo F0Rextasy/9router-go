@@ -126,7 +126,7 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 		// draining the stream, not by asking the upstream not to send one.
 		Stream: true,
 	})
-	if err != nil && session.claim.reuse && ctx.Err() == nil {
+	if err != nil && session.claim.reuse && ctx.Err() == nil && !isDeepSeekAuthError(err) {
 		// The pinned session failed at the HTTP level: the chat was deleted in
 		// the DeepSeek UI, the upstream session expired, or the connection
 		// dropped. None of that is the account being refused — the sibling
@@ -135,7 +135,10 @@ func ForwardDeepSeekWeb(w http.ResponseWriter, req *Request) error {
 		// the fresh session carries the whole prompt, because nothing of the
 		// old thread can be assumed to exist. One retry only — a second
 		// failure is an upstream condition no third attempt of the same shape
-		// fixes, and every attempt is another request on this account.
+		// fixes, and every attempt is another request on this account. An
+		// auth failure never heals: the token was freshly exchanged and the
+		// upstream rejected it, so a new session would just add two more
+		// doomed calls to the account the site is refusing.
 		deepSeekAbandonSession(session, ctx, turn, userToken, accessToken)
 		deepSeekCloseSession(ctx, turn, userToken, accessToken, session.id)
 		if freshID, createErr := turn.createSession(ctx, accessToken); createErr == nil {
