@@ -110,7 +110,7 @@ func applyCodexCompact(cfg *providers.ProviderConfig, body []byte) (*providers.P
 		return cfg, body
 	}
 	delete(envelope, "_compact")
-	out, err := json.Marshal(envelope)
+	out, err := marshalStable(envelope)
 	if err != nil {
 		return cfg, body
 	}

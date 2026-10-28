@@ -63,6 +63,53 @@ func TestWireBodiesAreDeterministic(t *testing.T) {
 				}`), "muse-spark-1.3-contributor")
 			},
 		},
+		{
+			// The Codex Responses lane: transformed from Chat Completions with
+			// tools, system instructions, and messages. Must be deterministic
+			// so OpenAI prompt prefix caching hits across conversation turns.
+			name:    "codex responses body from chat completions",
+			wantKey: "input",
+			call: func(t *testing.T) ([]byte, error) {
+				b, _, err := buildResponsesBody([]byte(`{
+					"model": "gpt-6.1-sol",
+					"messages": [
+						{"role": "system", "content": "You are a helpful assistant."},
+						{"role": "user", "content": "Hello"}
+					],
+					"tools": [
+						{"type": "function", "function": {"name": "Read", "description": "read file", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}
+					]
+				}`))
+				if err != nil {
+					return nil, err
+				}
+				b = stripCodexUnsupportedTokenParams(b)
+				b = rewriteCodexUpstreamModel(b)
+				return b, nil
+			},
+		},
+		{
+			// Codex Responses lane from pre-shaped Responses input: must preserve
+			// deterministic prefix across multiple turns.
+			name:    "codex responses body from responses input",
+			wantKey: "input",
+			call: func(t *testing.T) ([]byte, error) {
+				b, _, err := buildResponsesBody([]byte(`{
+					"model": "gpt-5.3-codex",
+					"stream": true,
+					"store": false,
+					"input": [
+						{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "ping"}]}
+					]
+				}`))
+				if err != nil {
+					return nil, err
+				}
+				b = stripCodexUnsupportedTokenParams(b)
+				b = rewriteCodexUpstreamModel(b)
+				return b, nil
+			},
+		},
 	}
 
 	for _, tt := range tests {
